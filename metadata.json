@@ -1,0 +1,6 @@
+{
+  "name": "ClipMatrix",
+  "description": "AI-Powered Video Clipping & Publishing Studio — Personal AI video clipping, streamer monitoring, multi-language caption studio, and publishing workflow platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
