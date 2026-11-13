@@ -11,18 +11,25 @@ dotenv.config();
 
 const PORT = 3000;
 const FASTAPI_HOST = '127.0.0.1';
-const FASTAPI_PORT = Number(process.env.FASTAPI_PORT || 8000);
+const FASTAPI_PORT = Number(process.env.FASTAPI_PORT || 8001);
 const STORAGE_ROOT = path.resolve(process.cwd(), 'storage');
 
 fs.mkdirSync(path.join(STORAGE_ROOT, 'videos'), { recursive: true });
 fs.mkdirSync(path.join(STORAGE_ROOT, 'audio'), { recursive: true });
 fs.mkdirSync(path.join(STORAGE_ROOT, 'clips'), { recursive: true });
 fs.mkdirSync(path.join(STORAGE_ROOT, 'thumbnails'), { recursive: true });
+fs.mkdirSync(path.join(STORAGE_ROOT, 'subtitles'), { recursive: true });
 
 let fastApiProcess: ChildProcess | null = null;
 
 function startFastApiBackend(): void {
   if (fastApiProcess) return;
+
+  const pythonPackagesDir = path.resolve(process.cwd(), '.python_packages');
+  const existingPythonPath = process.env.PYTHONPATH || '';
+  const combinedPythonPath = existingPythonPath
+    ? `${pythonPackagesDir}:${process.cwd()}:${existingPythonPath}`
+    : `${pythonPackagesDir}:${process.cwd()}`;
 
   fastApiProcess = spawn(
     'python3',
@@ -37,7 +44,7 @@ function startFastApiBackend(): void {
     ],
     {
       cwd: process.cwd(),
-      env: { ...process.env },
+      env: { ...process.env, PYTHONPATH: combinedPythonPath },
       stdio: ['ignore', 'pipe', 'pipe'],
     }
   );

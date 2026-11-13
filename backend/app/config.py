@@ -12,7 +12,7 @@ load_dotenv(BACKEND_ROOT / ".env", override=False)
 
 class Settings:
     PROJECT_NAME: str = "ClipMatrix Phase 2 FastAPI Engine"
-    VERSION: str = "2.1.0"
+    VERSION: str = "2.2.0"
 
     # PostgreSQL discrete connection parameters (supports Cloud SQL & local Postgres)
     SQL_HOST: str = os.getenv("SQL_HOST", "localhost")
@@ -31,7 +31,7 @@ class Settings:
     WHISPER_DEVICE: str = os.getenv("WHISPER_DEVICE", "cpu")
     WHISPER_COMPUTE_TYPE: str = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 
-    # Gemini API Configuration
+    # Gemini API Configuration (Strictly uses GEMINI_MODEL from environment, defaulting to gemini-4-hydrogen)
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-4-hydrogen")
 
@@ -43,6 +43,7 @@ class Settings:
     AUDIO_DIR: Path = STORAGE_ROOT / "audio"
     CLIPS_DIR: Path = STORAGE_ROOT / "clips"
     THUMBNAILS_DIR: Path = STORAGE_ROOT / "thumbnails"
+    SUBTITLES_DIR: Path = STORAGE_ROOT / "subtitles"
     MAX_UPLOAD_SIZE_BYTES: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "500")) * 1024 * 1024
 
 

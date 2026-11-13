@@ -14,6 +14,13 @@ import {
   Plus,
   Trash2,
   Activity,
+  Link2,
+  Wand2,
+  Check,
+  Loader2,
+  Subtitles,
+  ScanFace,
+  Maximize2,
 } from 'lucide-react';
 import {
   AspectRatioPreset,
@@ -21,10 +28,14 @@ import {
   BackendHighlightRecord,
   BackendTranscriptRecord,
   BackendVideoRecord,
+  CaptionLanguage,
   ClipDurationPreset,
   GeneratedClip,
   NavigationPageId,
+  NumberOfShortsOption,
+  SubtitleStylePreset,
   VideoProject,
+  VideoSourceType,
 } from '../types/clipmatrix';
 
 interface ManualClipDraft {
@@ -41,7 +52,33 @@ interface SystemQuickStatus {
   geminiApiKeyConfigured: boolean;
   postgresConfigured: boolean;
   redisAvailable: boolean;
+  geminiModel?: string;
 }
+
+interface UrlValidationResult {
+  valid: boolean;
+  accessible: boolean;
+  sourceType: string;
+  title: string;
+  authorName?: string;
+  thumbnailUrl?: string;
+  directStreamPermitted: boolean;
+  requiresOriginalUpload: boolean;
+  message: string;
+}
+
+const SHORTS_PIPELINE_STAGES = [
+  'Importing Video',
+  'Analyzing Video',
+  'Extracting Audio',
+  'Transcribing Audio',
+  'Detecting Highlights',
+  'Generating Shorts',
+  'Creating Subtitles',
+  'Creating Thumbnails',
+  'Saving Clips',
+  'Completed',
+] as const;
 
 interface LongVideoToClipsPageProps {
   projects: VideoProject[];
@@ -51,6 +88,7 @@ interface LongVideoToClipsPageProps {
     project: VideoProject;
     generatedClips: GeneratedClip[];
   }) => void;
+  onSelectClipForStudio?: (clipId: string) => void;
   onNavigate: (page: NavigationPageId) => void;
 }
 
@@ -69,23 +107,58 @@ function formatSeconds(sec: number): string {
 }
 
 export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
-  projects,
   backendVideos,
   onRefreshWorkspace,
+  onSelectClipForStudio,
   onNavigate,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const clipVideoRefs = useRef<Record<number, HTMLVideoElement | null>>({});
 
   const [systemStatus, setSystemStatus] = useState<SystemQuickStatus | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<number | null>(
     backendVideos[0]?.id ?? null
   );
+
+  // Automatic Shorts Input Options
+  const [inputSourceType, setInputSourceType] =
+    useState<VideoSourceType>('youtube_url');
+  const [videoUrlInput, setVideoUrlInput] = useState('');
+  const [isValidatingUrl, setIsValidatingUrl] = useState(false);
+  const [urlValidation, setUrlValidation] =
+    useState<UrlValidationResult | null>(null);
+
   const [uploadTitle, setUploadTitle] = useState('');
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [isSynthesizingTest, setIsSynthesizingTest] = useState(false);
 
-  // Step 2: Transcription state
+  // Automatic Shorts User Settings
+  const [numShorts, setNumShorts] = useState<NumberOfShortsOption>(3);
+  const [shortsDurationPreset, setShortsDurationPreset] =
+    useState<ClipDurationPreset>(15);
+  const [customDuration, setCustomDuration] = useState<number>(25);
+  const [aspectRatio, setAspectRatio] = useState<AspectRatioPreset>('9:16');
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState<boolean>(true);
+  const [smartReframing, setSmartReframing] = useState<boolean>(true);
+  const [faceTracking, setFaceTracking] = useState<boolean>(true);
+  const [subtitleLanguage, setSubtitleLanguage] =
+    useState<CaptionLanguage>('english');
+  const [subtitleStyle, setSubtitleStyle] =
+    useState<SubtitleStylePreset>('bold_hormozi');
+
+  // Real-Time 10-Stage Automatic Shorts Progress State
+  const [isGeneratingShorts, setIsGeneratingShorts] = useState(false);
+  const [activePipelineStage, setActivePipelineStage] = useState<string | null>(
+    null
+  );
+  const [pipelineProgressPct, setPipelineProgressPct] = useState<number>(0);
+  const [regeneratingClipId, setRegeneratingClipId] = useState<number | null>(
+    null
+  );
+  const [deletingClipId, setDeletingClipId] = useState<number | null>(null);
+
+  // Step 2: Granular Transcription state
   const [whisperModelSize, setWhisperModelSize] = useState<
     'tiny' | 'base' | 'small' | 'medium' | 'large-v3'
   >('tiny');
@@ -93,24 +166,16 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcriptionNotice, setTranscriptionNotice] = useState('');
 
-  // Step 3: Gemini Highlight state
+  // Step 3: Granular Gemini Highlight state
   const [isDetectingHighlights, setIsDetectingHighlights] = useState(false);
   const [selectedHighlightIds, setSelectedHighlightIds] = useState<number[]>([]);
 
-  // Step 4: Clip generation state
-  const [durationPreset, setDurationPreset] = useState<
-    ClipDurationPreset | 'exact'
-  >('exact');
-  const [customDuration, setCustomDuration] = useState<number>(30);
-  const [aspectRatio, setAspectRatio] = useState<AspectRatioPreset>('9:16');
+  // Step 4: Manual Clip generation state
   const [manualStartTime, setManualStartTime] = useState('00:02');
   const [manualEndTime, setManualEndTime] = useState('00:14');
   const [manualClipTitle, setManualClipTitle] = useState('');
   const [manualQueue, setManualQueue] = useState<ManualClipDraft[]>([]);
   const [isRenderingClips, setIsRenderingClips] = useState(false);
-  const [latestRenderedClips, setLatestRenderedClips] = useState<
-    BackendClipRecord[]
-  >([]);
 
   const [errorMessage, setErrorMessage] = useState('');
   const [successBanner, setSuccessBanner] = useState('');
@@ -124,7 +189,6 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
       .catch(() => {});
   }, []);
 
-  // Sync selected video ID when backendVideos load
   useEffect(() => {
     if (selectedVideoId === null && backendVideos.length > 0) {
       setSelectedVideoId(backendVideos[0].id);
@@ -140,11 +204,11 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
     activeVideo?.transcript || null;
   const activeHighlights: BackendHighlightRecord[] =
     activeVideo?.highlights || [];
+  const activeClips: BackendClipRecord[] = activeVideo?.clips || [];
 
-  // Automatically select newly detected highlights if none selected yet
   useEffect(() => {
     if (activeHighlights.length > 0 && selectedHighlightIds.length === 0) {
-      setSelectedHighlightIds(activeHighlights.slice(0, 2).map((h) => h.id));
+      setSelectedHighlightIds(activeHighlights.slice(0, 3).map((h) => h.id));
     }
   }, [activeVideo?.id, activeHighlights.length]);
 
@@ -155,7 +219,41 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
     }
   };
 
-  // Step 1A: Upload real video file from PC or mobile with XMLHttpRequest progress
+  // Validate YouTube or Google Drive URL via official backend endpoint
+  const handleValidateVideoUrl = async () => {
+    if (!videoUrlInput.trim()) {
+      setErrorMessage('Please paste a YouTube or Google Drive video URL first.');
+      return;
+    }
+    setErrorMessage('');
+    setSuccessBanner('');
+    setIsValidatingUrl(true);
+    setUrlValidation(null);
+    try {
+      const res = await fetch('/api/videos/validate-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceType: inputSourceType,
+          url: videoUrlInput.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Video URL validation failed.');
+      }
+      setUrlValidation(data);
+      if (data.title && !uploadTitle.trim()) {
+        setUploadTitle(data.title);
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Could not validate video URL.');
+    } finally {
+      setIsValidatingUrl(false);
+    }
+  };
+
+  // Upload real video file from PC or mobile with XMLHttpRequest progress
   const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -168,6 +266,10 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
     formData.append('video', file);
     if (uploadTitle.trim()) {
       formData.append('title', uploadTitle.trim());
+    }
+    formData.append('sourceType', inputSourceType);
+    if (videoUrlInput.trim()) {
+      formData.append('sourceUrl', videoUrlInput.trim());
     }
 
     const xhr = new XMLHttpRequest();
@@ -190,7 +292,6 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
         if (xhr.status >= 200 && xhr.status < 300 && data.video) {
           await onRefreshWorkspace();
           setSelectedVideoId(data.video.id);
-          setUploadTitle('');
           setSuccessBanner(
             `Uploaded "${data.video.title}" (${data.video.width}x${data.video.height}, ${data.video.durationSeconds}s, ${formatBytes(data.video.fileSizeBytes)}) and verified via FFprobe.`
           );
@@ -212,7 +313,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
     xhr.send(formData);
   };
 
-  // Step 1B: Generate a real playable MP4 video with spoken English voiceover via FFmpeg
+  // Synthesize a real playable 45s MP4 video with spoken English voiceover via FFmpeg
   const handleSynthesizeRealTestVideo = async () => {
     setErrorMessage('');
     setSuccessBanner('');
@@ -224,8 +325,11 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
         body: JSON.stringify({
           title:
             uploadTitle.trim() ||
+            urlValidation?.title ||
             'Creator Retention & AI Video Engineering Masterclass',
-          durationSeconds: 36,
+          durationSeconds: 45,
+          sourceType: inputSourceType,
+          sourceUrl: videoUrlInput.trim() || undefined,
         }),
       });
       const data = await response.json();
@@ -234,7 +338,6 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
       }
       await onRefreshWorkspace();
       setSelectedVideoId(data.video.id);
-      setUploadTitle('');
       setSuccessBanner(
         `Generated real spoken-English MP4 video "${data.video.title}" via FFmpeg (${data.video.width}x${data.video.height}, ${data.video.durationSeconds}s, ${formatBytes(data.video.fileSizeBytes)}).`
       );
@@ -245,10 +348,170 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
     }
   };
 
-  // Step 2: Extract Audio with FFmpeg & Transcribe with faster-whisper
+  // Master Action: Generate Shorts (10-Stage Real AI Video Processing Pipeline)
+  const handleGenerateAutomaticShorts = async () => {
+    setErrorMessage('');
+    setSuccessBanner('');
+
+    if (
+      (inputSourceType === 'youtube_url' || inputSourceType === 'google_drive') &&
+      videoUrlInput.trim() &&
+      !activeVideo
+    ) {
+      // Let backend validate URL first; if it requires local upload, backend will tell user clearly
+    } else if (!activeVideo && !videoUrlInput.trim()) {
+      setErrorMessage(
+        'Please paste a YouTube/Google Drive URL, upload a video file from your device, or click "Generate Spoken Test MP4" first.'
+      );
+      return;
+    }
+
+    const targetDurationSeconds =
+      shortsDurationPreset === 'custom'
+        ? Number(customDuration)
+        : Number(shortsDurationPreset);
+
+    setIsGeneratingShorts(true);
+    setActivePipelineStage('Importing Video');
+    setPipelineProgressPct(8);
+
+    try {
+      const res = await fetch('/api/shorts/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceType: inputSourceType,
+          sourceUrl: videoUrlInput.trim() || undefined,
+          videoId: activeVideo?.id,
+          title: uploadTitle.trim() || urlValidation?.title || undefined,
+          numShorts,
+          targetDurationSeconds,
+          aspectRatio,
+          subtitlesEnabled,
+          subtitleLanguage,
+          subtitleStyle,
+          smartReframing,
+          faceTracking,
+          whisperModelSize,
+          asyncMode: true,
+        }),
+      });
+      const startData = await res.json();
+      if (!res.ok) {
+        throw new Error(
+          startData.error || 'Failed to start Automatic Shorts generation.'
+        );
+      }
+
+      const jobId = startData.job?.id;
+      if (!jobId) {
+        throw new Error('No processing job ID returned from backend.');
+      }
+
+      // Poll /api/jobs/{jobId} for live stage progression
+      let finished = false;
+      while (!finished) {
+        await new Promise((resolve) => setTimeout(resolve, 550));
+        const pollRes = await fetch(`/api/jobs/${jobId}`);
+        if (!pollRes.ok) break;
+        const pollData = await pollRes.json();
+        const job = pollData.job;
+        if (!job) break;
+
+        setActivePipelineStage(job.currentStep || 'Generating Shorts');
+        setPipelineProgressPct(Number(job.progressPercent || 50));
+
+        if (job.status === 'completed') {
+          finished = true;
+          setActivePipelineStage('Completed');
+          setPipelineProgressPct(100);
+          await onRefreshWorkspace();
+          const generatedCount = (pollData.clips || []).length;
+          setSuccessBanner(
+            `Completed all 10 pipeline stages! Generated ${generatedCount} vertical ${aspectRatio} Short(s) with faster-whisper transcription, gemini-4-hydrogen highlight timestamps, ${subtitlesEnabled ? 'burned-in subtitles, ' : ''}and JPEG thumbnails.`
+          );
+        } else if (job.status === 'failed') {
+          finished = true;
+          throw new Error(
+            job.errorMessage || 'Automatic Shorts pipeline failed.'
+          );
+        }
+      }
+    } catch (err: any) {
+      setErrorMessage(
+        err.message || 'Automatic Shorts generation encountered an error.'
+      );
+    } finally {
+      setIsGeneratingShorts(false);
+    }
+  };
+
+  // Clip Dashboard Actions: Play Preview, Regenerate, Delete
+  const handlePlayClipPreview = (clipId: number) => {
+    const el = clipVideoRefs.current[clipId];
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.currentTime = 0;
+      el.play().catch(() => {});
+    }
+  };
+
+  const handleRegenerateClip = async (clip: BackendClipRecord) => {
+    setErrorMessage('');
+    setSuccessBanner('');
+    setRegeneratingClipId(clip.id);
+    try {
+      const res = await fetch(`/api/clips/${clip.id}/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          aspectRatio,
+          subtitlesEnabled,
+          subtitleStyle,
+          smartReframing,
+          faceTracking,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to regenerate clip.');
+      }
+      await onRefreshWorkspace();
+      setSuccessBanner(
+        `Regenerated "${clip.title}" in ${aspectRatio} (${data.clip?.durationSeconds}s) via FFmpeg.`
+      );
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to regenerate clip.');
+    } finally {
+      setRegeneratingClipId(null);
+    }
+  };
+
+  const handleDeleteClip = async (clip: BackendClipRecord) => {
+    setErrorMessage('');
+    setSuccessBanner('');
+    setDeletingClipId(clip.id);
+    try {
+      const res = await fetch(`/api/clips/${clip.id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete clip.');
+      }
+      await onRefreshWorkspace();
+      setSuccessBanner(`Deleted clip "${clip.title}" from PostgreSQL and storage.`);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to delete clip.');
+    } finally {
+      setDeletingClipId(null);
+    }
+  };
+
+  // Step 2: Granular Extract Audio & Transcribe
   const handleRunTranscription = async () => {
     if (!activeVideo) {
-      setErrorMessage('Please upload or select a video in Step 1 first.');
+      setErrorMessage('Please upload or select a video first.');
       return;
     }
     setErrorMessage('');
@@ -284,7 +547,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
     }
   };
 
-  // Step 3: Run Gemini AI Highlight Detection on the Whisper transcript
+  // Step 3: Granular Gemini Highlight Detection
   const handleDetectHighlights = async () => {
     if (!activeVideo) {
       setErrorMessage('Please upload or select a video first.');
@@ -292,7 +555,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
     }
     if (!activeTranscript) {
       setErrorMessage(
-        'Please complete Step 2 (faster-whisper Speech Transcription) before running Gemini AI highlight analysis.'
+        'Please complete faster-whisper Speech Transcription before running Gemini AI highlight analysis.'
       );
       return;
     }
@@ -300,11 +563,21 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
     setSuccessBanner('');
     setIsDetectingHighlights(true);
     try {
+      const targetDurationSeconds =
+        shortsDurationPreset === 'custom'
+          ? Number(customDuration)
+          : Number(shortsDurationPreset);
+
       const response = await fetch(
         `/api/videos/${activeVideo.id}/highlights`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            numShorts,
+            targetDurationSeconds,
+            subtitleLanguage,
+          }),
         }
       );
       const data = await response.json();
@@ -315,7 +588,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
       const ids = (data.highlights || []).map((h: any) => h.id);
       setSelectedHighlightIds(ids);
       setSuccessBanner(
-        `Gemini AI analyzed the Whisper transcript and detected ${ids.length} viral highlights.`
+        `Gemini (gemini-4-hydrogen) analyzed the Whisper transcript and detected ${ids.length} viral highlights.`
       );
     } catch (err: any) {
       setErrorMessage(
@@ -364,11 +637,9 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
     setSuccessBanner('');
 
     const targetDurationSeconds =
-      durationPreset === 'exact'
-        ? 0
-        : durationPreset === 'custom'
+      shortsDurationPreset === 'custom'
         ? Number(customDuration)
-        : Number(durationPreset);
+        : Number(shortsDurationPreset);
 
     const manualSegmentsToSubmit =
       mode === 'manual_direct'
@@ -413,7 +684,12 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
             highlightIds: highlightIdsToSubmit,
             manualSegments: manualSegmentsToSubmit,
             aspectRatio,
-            targetDurationSeconds,
+            targetDurationSeconds: mode === 'manual_direct' ? 0 : targetDurationSeconds,
+            subtitlesEnabled,
+            subtitleStyle,
+            subtitleLanguage,
+            smartReframing,
+            faceTracking,
           }),
         }
       );
@@ -422,7 +698,6 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
         throw new Error(data.error || 'FFmpeg clip generation failed.');
       }
 
-      setLatestRenderedClips(data.clips || []);
       if (mode !== 'manual_direct') {
         setManualQueue([]);
       }
@@ -437,19 +712,23 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
     }
   };
 
+  const currentStageIndex = activePipelineStage
+    ? SHORTS_PIPELINE_STAGES.indexOf(activePipelineStage as any)
+    : -1;
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-[#1C2030]">
         <div>
           <div className="text-xs text-purple-400 font-medium">
-            Primary FastAPI Engine · FFprobe · Faster-Whisper · Gemini AI · FFmpeg
+            Long Video to Automatic Shorts · FFprobe · Faster-Whisper · Gemini (gemini-4-hydrogen) · FFmpeg
           </div>
           <h1 className="text-2xl font-display font-bold text-white">
-            Long Video to Clips
+            Long Video to Clips &amp; Automatic Shorts
           </h1>
           <p className="text-sm text-slate-400">
-            Upload real video files from PC or mobile, transcribe spoken audio locally with faster-whisper, detect viral hooks with Gemini AI, and slice frame-accurate MP4 clips with FFmpeg.
+            Paste a YouTube or Google Drive link, or upload a long video from PC or mobile to automatically generate vertical 9:16 Shorts with burned-in subtitles, AI captions, and thumbnails.
           </p>
         </div>
 
@@ -467,7 +746,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
             onClick={() => onNavigate('generated-clips')}
             className="px-3.5 py-2 rounded-lg bg-[#151928] hover:bg-[#1C2236] border border-[#262E45] text-xs font-medium text-white whitespace-nowrap"
           >
-            Browse Generated Clips
+            Browse Generated Clips ({activeClips.length})
           </button>
         </div>
       </div>
@@ -487,13 +766,10 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
               faster-whisper: {systemStatus.fasterWhisperInstalled ? 'READY' : 'MISSING'}
             </span>
             <span className={systemStatus.geminiApiKeyConfigured ? 'text-emerald-400' : 'text-amber-400'}>
-              Gemini API: {systemStatus.geminiApiKeyConfigured ? 'VERIFIED' : 'CHECK KEY'}
+              Gemini ({systemStatus.geminiModel || 'gemini-4-hydrogen'}): {systemStatus.geminiApiKeyConfigured ? 'VERIFIED' : 'CHECK KEY'}
             </span>
             <span className={systemStatus.postgresConfigured ? 'text-emerald-400' : 'text-red-400'}>
               PostgreSQL: {systemStatus.postgresConfigured ? 'ONLINE' : 'OFFLINE'}
-            </span>
-            <span className={systemStatus.redisAvailable ? 'text-emerald-400' : 'text-slate-400'}>
-              Queue: {systemStatus.redisAvailable ? 'REDIS' : 'SYNC FASTAPI'}
             </span>
           </div>
           <button
@@ -541,7 +817,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
               onClick={() => onNavigate('generated-clips')}
               className="underline font-medium text-white"
             >
-              Open Generated Clips
+              Open Generated Clips Page
             </button>
             <button
               type="button"
@@ -554,182 +830,670 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-        {/* Left 7 Columns: 4-Step Real Processing Pipeline */}
-        <div className="xl:col-span-7 space-y-6">
-          {/* STEP 1: Real Video Upload & FFprobe Verification */}
-          <section className="rounded-xl bg-[#10131E] border border-[#1E2436] p-6 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1C2235] pb-3">
-              <div>
-                <span className="text-[11px] font-mono uppercase text-purple-400">
-                  Step 1 · Video Ingestion &amp; FFprobe Validation
-                </span>
-                <h2 className="text-base font-display font-semibold text-white">
-                  Upload Video File (PC or Mobile)
-                </h2>
+      {/* AUTOMATIC SHORTS STUDIO: Video Input Options + User Settings + Generate Shorts Button */}
+      <section className="rounded-2xl bg-gradient-to-b from-[#131726] to-[#0E111C] border border-[#242B42] p-6 space-y-6 shadow-xl">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-[#1E2538] pb-4">
+          <div>
+            <span className="text-[11px] font-mono uppercase tracking-wider text-purple-400">
+              Automatic Long Video to Shorts Pipeline · Model: gemini-4-hydrogen
+            </span>
+            <h2 className="text-lg font-display font-bold text-white">
+              1. Choose Video Input Source &amp; Configure Shorts Settings
+            </h2>
+          </div>
+
+          {/* 3 Input Option Tabs */}
+          <div className="flex flex-wrap items-center gap-2">
+            {(
+              [
+                { id: 'youtube_url', label: 'YouTube Video URL' },
+                { id: 'google_drive', label: 'Google Drive Video URL' },
+                { id: 'local_upload', label: 'Upload from PC or Mobile' },
+              ] as const
+            ).map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => {
+                  setInputSourceType(tab.id);
+                  setUrlValidation(null);
+                  setErrorMessage('');
+                }}
+                className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors border ${
+                  inputSourceType === tab.id
+                    ? 'bg-purple-600/25 border-purple-500 text-white'
+                    : 'bg-[#0C0E17] border-[#22283B] text-slate-400 hover:text-white'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Prominent URL / Upload Input Bar + Generate Shorts CTA */}
+        <div className="space-y-4">
+          {(inputSourceType === 'youtube_url' ||
+            inputSourceType === 'google_drive') && (
+            <div className="space-y-3">
+              <label
+                htmlFor="long-video-url-input"
+                className="block text-xs font-medium text-slate-300"
+              >
+                {inputSourceType === 'youtube_url'
+                  ? 'Paste YouTube Long Video URL (Validated via Official YouTube oEmbed API)'
+                  : 'Paste Google Drive Shared Video URL'}
+              </label>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                <div className="relative flex-1">
+                  <Link2 className="w-4 h-4 text-slate-400 absolute left-3.5 top-3 pointer-events-none" />
+                  <input
+                    id="long-video-url-input"
+                    type="url"
+                    value={videoUrlInput}
+                    onChange={(e) => setVideoUrlInput(e.target.value)}
+                    placeholder={
+                      inputSourceType === 'youtube_url'
+                        ? 'https://www.youtube.com/watch?v=... or https://youtu.be/...'
+                        : 'https://drive.google.com/file/d/.../view?usp=sharing'
+                    }
+                    className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[#0A0C14] border border-[#262F47] text-xs text-white focus:outline-none focus:border-purple-500 font-mono"
+                  />
+                </div>
+                <button
+                  type="button"
+                  disabled={isValidatingUrl}
+                  onClick={handleValidateVideoUrl}
+                  className="px-4 py-2.5 rounded-xl bg-[#171C2E] hover:bg-[#1F263D] border border-[#2B3554] text-xs font-semibold text-slate-200 whitespace-nowrap"
+                >
+                  {isValidatingUrl ? 'Checking Accessibility...' : 'Validate Link'}
+                </button>
               </div>
-              {backendVideos.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <label
-                    htmlFor="select-ingested-video"
-                    className="text-xs text-slate-400"
-                  >
-                    Active Video:
-                  </label>
-                  <select
-                    id="select-ingested-video"
-                    value={activeVideo?.id || ''}
-                    onChange={(e) => {
-                      setSelectedVideoId(Number(e.target.value));
-                      setSelectedHighlightIds([]);
-                    }}
-                    className="px-2.5 py-1.5 rounded-lg bg-[#0C0E17] border border-[#22283B] text-xs text-white font-mono"
-                  >
-                    {backendVideos.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        #{v.id} · {v.title.slice(0, 32)} ({v.durationSeconds}s)
-                      </option>
-                    ))}
-                  </select>
+
+              {urlValidation && (
+                <div className="p-3.5 rounded-xl bg-[#0B0E17] border border-purple-500/40 space-y-2 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-semibold text-white">
+                      Verified: {urlValidation.title}
+                      {urlValidation.authorName
+                        ? ` · ${urlValidation.authorName}`
+                        : ''}
+                    </span>
+                    <span className="text-[11px] font-mono text-emerald-400">
+                      URL ACCESSIBLE
+                    </span>
+                  </div>
+                  <p className="text-slate-300">{urlValidation.message}</p>
+                  {urlValidation.requiresOriginalUpload && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium text-xs"
+                      >
+                        Upload Original Video File from PC / Mobile
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSynthesizingTest}
+                        onClick={handleSynthesizeRealTestVideo}
+                        className="px-3 py-1.5 rounded-lg bg-[#161B2B] hover:bg-[#1F263E] border border-[#2B3450] text-slate-200 font-medium text-xs"
+                      >
+                        {isSynthesizingTest
+                          ? 'Synthesizing Studio Video...'
+                          : 'Attach Spoken Studio Masterclass Video'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
+          )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label
-                  htmlFor="video-upload-title"
-                  className="block text-xs font-medium text-slate-300 mb-1"
-                >
-                  Optional Project Title
-                </label>
-                <input
-                  id="video-upload-title"
-                  type="text"
-                  value={uploadTitle}
-                  onChange={(e) => setUploadTitle(e.target.value)}
-                  placeholder="e.g. Founder Podcast Episode 42"
-                  className="w-full px-3 py-2 rounded-lg bg-[#0C0E17] border border-[#22283B] text-xs text-white focus:outline-none focus:border-purple-500"
-                />
-              </div>
-
-              <div className="flex flex-col justify-end">
-                <input
-                  ref={fileInputRef}
-                  id="real-video-file-input"
-                  type="file"
-                  accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,video/*"
-                  onChange={handleFileSelected}
-                  className="hidden"
-                />
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={uploadProgress !== null}
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex-1 inline-flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 disabled:opacity-50 text-xs font-semibold text-white transition-colors"
-                  >
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>
-                      {uploadProgress !== null
-                        ? `Uploading ${uploadProgress}%...`
-                        : 'Select Video File'}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={isSynthesizingTest || uploadProgress !== null}
-                    onClick={handleSynthesizeRealTestVideo}
-                    className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-[#161B2B] hover:bg-[#1E253A] border border-[#262F49] disabled:opacity-50 text-xs font-medium text-slate-200 transition-colors whitespace-nowrap"
-                    title="Synthesize a real MP4 video with spoken English voiceover using FFmpeg"
-                  >
-                    <Film className="w-3.5 h-3.5 text-purple-400" />
-                    <span>
-                      {isSynthesizingTest
-                        ? 'Encoding Speech MP4...'
-                        : 'Generate Spoken Test MP4'}
-                    </span>
-                  </button>
-                </div>
-              </div>
+          {/* File Upload & Active Studio Video Row */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-end">
+            <div className="lg:col-span-4">
+              <label
+                htmlFor="video-upload-title"
+                className="block text-xs font-medium text-slate-300 mb-1"
+              >
+                Video / Project Title
+              </label>
+              <input
+                id="video-upload-title"
+                type="text"
+                value={uploadTitle}
+                onChange={(e) => setUploadTitle(e.target.value)}
+                placeholder="e.g. Creator Retention & AI Engineering Podcast"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#0A0C14] border border-[#262F47] text-xs text-white focus:outline-none focus:border-purple-500"
+              />
             </div>
 
-            {uploadProgress !== null && (
-              <div className="space-y-1">
-                <div className="flex justify-between text-xs font-mono text-slate-300">
-                  <span>Uploading video stream to FastAPI backend...</span>
-                  <span>{uploadProgress}%</span>
-                </div>
-                <div className="w-full h-2 rounded-full bg-[#0C0E17] overflow-hidden border border-[#22283B]">
-                  <div
-                    className="h-full bg-gradient-to-r from-purple-500 to-blue-500 transition-all"
-                    style={{ width: `${uploadProgress}%` }}
-                  />
-                </div>
-              </div>
-            )}
+            <div className="lg:col-span-4">
+              <label
+                htmlFor="select-ingested-video"
+                className="block text-xs font-medium text-slate-300 mb-1"
+              >
+                Active Source Video in Studio ({backendVideos.length} stored)
+              </label>
+              <select
+                id="select-ingested-video"
+                value={activeVideo?.id || ''}
+                onChange={(e) => {
+                  setSelectedVideoId(Number(e.target.value));
+                  setSelectedHighlightIds([]);
+                }}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#0A0C14] border border-[#262F47] text-xs text-white font-mono"
+              >
+                {backendVideos.length === 0 ? (
+                  <option value="">No video uploaded yet</option>
+                ) : (
+                  backendVideos.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      #{v.id} · {v.title.slice(0, 34)} ({v.durationSeconds}s · {v.width}×{v.height})
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
 
-            {/* FFprobe Verified Metadata Strip */}
-            {activeVideo ? (
-              <div className="p-3.5 rounded-lg bg-[#0C0E17] border border-[#22283B] space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-white truncate">
-                    {activeVideo.title}
-                  </span>
-                  <span className="text-[11px] font-mono text-emerald-400 shrink-0">
-                    Status: {activeVideo.status.toUpperCase()}
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px] font-mono text-slate-400">
-                  <div>
-                    <span className="text-slate-500 block">Resolution</span>
-                    <span className="text-slate-200">
-                      {activeVideo.width}×{activeVideo.height}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Duration</span>
-                    <span className="text-slate-200">
-                      {activeVideo.durationSeconds}s (
-                      {formatSeconds(activeVideo.durationSeconds)})
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Codecs</span>
-                    <span className="text-slate-200">
-                      {activeVideo.videoCodec} / {activeVideo.audioCodec}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Frame Rate</span>
-                    <span className="text-slate-200">{activeVideo.fps} fps</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">File Size</span>
-                    <span className="text-slate-200">
-                      {formatBytes(activeVideo.fileSizeBytes)}
-                    </span>
-                  </div>
-                </div>
+            <div className="lg:col-span-4 flex flex-wrap items-center gap-2">
+              <input
+                ref={fileInputRef}
+                id="real-video-file-input"
+                type="file"
+                accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,video/*"
+                onChange={handleFileSelected}
+                className="hidden"
+              />
+              <button
+                type="button"
+                disabled={uploadProgress !== null}
+                onClick={() => fileInputRef.current?.click()}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-3.5 rounded-xl bg-[#171C2E] hover:bg-[#1F263D] border border-[#2B3554] text-xs font-semibold text-white transition-colors whitespace-nowrap"
+              >
+                <Upload className="w-3.5 h-3.5 text-purple-400" />
+                <span>
+                  {uploadProgress !== null
+                    ? `Uploading ${uploadProgress}%...`
+                    : 'Upload PC / Mobile Video'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isSynthesizingTest || uploadProgress !== null}
+                onClick={handleSynthesizeRealTestVideo}
+                className="inline-flex items-center justify-center gap-1.5 py-2.5 px-3.5 rounded-xl bg-[#171C2E] hover:bg-[#1F263D] border border-[#2B3554] text-xs font-medium text-slate-200 transition-colors whitespace-nowrap"
+                title="Synthesize a 45-second spoken-English MP4 video using FFmpeg libflite"
+              >
+                <Film className="w-3.5 h-3.5 text-blue-400" />
+                <span>
+                  {isSynthesizingTest
+                    ? 'Encoding 45s MP4...'
+                    : 'Generate Spoken Test MP4'}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {uploadProgress !== null && (
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs font-mono text-slate-300">
+                <span>Uploading video stream to FastAPI backend...</span>
+                <span>{uploadProgress}%</span>
               </div>
+              <div className="w-full h-2 rounded-full bg-[#0A0C14] overflow-hidden border border-[#262F47]">
+                <div
+                  className="h-full bg-gradient-to-r from-purple-500 to-blue-500 transition-all"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* User Settings Grid: Number of Shorts, Clip Duration, Aspect Ratio, Additional Settings */}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 pt-2 border-t border-[#1E2538]">
+          {/* Setting 1: Number of Shorts */}
+          <div className="p-3.5 rounded-xl bg-[#0A0C14] border border-[#1E2436] space-y-2">
+            <label className="block text-xs font-semibold text-slate-200">
+              Number of Shorts
+            </label>
+            <div className="grid grid-cols-4 gap-1.5">
+              {([3, 5, 10, 'auto'] as const).map((opt) => (
+                <button
+                  key={String(opt)}
+                  type="button"
+                  onClick={() => setNumShorts(opt)}
+                  className={`py-1.5 px-2 rounded-lg text-xs font-mono font-semibold border transition-colors ${
+                    numShorts === opt
+                      ? 'bg-purple-600 border-purple-400 text-white'
+                      : 'bg-[#121624] border-[#232A40] text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {opt === 'auto' ? 'Auto' : opt}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Setting 2: Clip Duration */}
+          <div className="p-3.5 rounded-xl bg-[#0A0C14] border border-[#1E2436] space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-slate-200">
+                Clip Duration
+              </label>
+              {shortsDurationPreset === 'custom' && (
+                <input
+                  type="number"
+                  min={5}
+                  max={180}
+                  value={customDuration}
+                  onChange={(e) => setCustomDuration(Number(e.target.value))}
+                  aria-label="Custom clip duration in seconds"
+                  className="w-16 px-2 py-0.5 rounded bg-[#121624] border border-purple-500 text-xs font-mono text-white text-right"
+                />
+              )}
+            </div>
+            <div className="grid grid-cols-5 gap-1">
+              {([15, 30, 45, 60, 'custom'] as const).map((dur) => (
+                <button
+                  key={String(dur)}
+                  type="button"
+                  onClick={() => setShortsDurationPreset(dur)}
+                  className={`py-1.5 px-1.5 rounded-lg text-xs font-mono font-semibold border transition-colors ${
+                    shortsDurationPreset === dur
+                      ? 'bg-blue-600 border-blue-400 text-white'
+                      : 'bg-[#121624] border-[#232A40] text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {dur === 'custom' ? 'Custom' : `${dur}s`}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Setting 3: Aspect Ratio */}
+          <div className="p-3.5 rounded-xl bg-[#0A0C14] border border-[#1E2436] space-y-2">
+            <label className="block text-xs font-semibold text-slate-200">
+              Aspect Ratio
+            </label>
+            <div className="grid grid-cols-3 gap-1.5">
+              {(
+                [
+                  { id: '9:16', label: '9:16 Vertical' },
+                  { id: '1:1', label: '1:1 Square' },
+                  { id: '16:9', label: '16:9 Wide' },
+                ] as const
+              ).map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setAspectRatio(r.id)}
+                  className={`py-1.5 px-2 rounded-lg text-xs font-mono font-semibold border transition-colors ${
+                    aspectRatio === r.id
+                      ? 'bg-purple-600 border-purple-400 text-white'
+                      : 'bg-[#121624] border-[#232A40] text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Setting 4: Subtitle Language & Style */}
+          <div className="p-3.5 rounded-xl bg-[#0A0C14] border border-[#1E2436] space-y-2">
+            <label className="block text-xs font-semibold text-slate-200">
+              Subtitle Language &amp; Style
+            </label>
+            <div className="grid grid-cols-2 gap-1.5">
+              <select
+                aria-label="Subtitle Language"
+                value={subtitleLanguage}
+                onChange={(e) =>
+                  setSubtitleLanguage(e.target.value as CaptionLanguage)
+                }
+                className="px-2 py-1.5 rounded-lg bg-[#121624] border border-[#232A40] text-xs text-white"
+              >
+                <option value="english">English</option>
+                <option value="urdu">Urdu</option>
+                <option value="roman_urdu">Roman Urdu</option>
+                <option value="spanish">Spanish</option>
+                <option value="arabic">Arabic</option>
+              </select>
+
+              <select
+                aria-label="Subtitle Style"
+                value={subtitleStyle}
+                onChange={(e) =>
+                  setSubtitleStyle(e.target.value as SubtitleStylePreset)
+                }
+                className="px-2 py-1.5 rounded-lg bg-[#121624] border border-[#232A40] text-xs text-white"
+              >
+                <option value="bold_hormozi">Bold Hormozi</option>
+                <option value="neon_viral">Neon Viral</option>
+                <option value="clean_studio">Clean Studio</option>
+                <option value="editorial_top">Editorial Top</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Additional AI Framing & Subtitle Toggles + Prominent GENERATE SHORTS Button */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pt-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setSubtitlesEnabled((v) => !v)}
+              className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-colors ${
+                subtitlesEnabled
+                  ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-200'
+                  : 'bg-[#0A0C14] border-[#22283B] text-slate-400'
+              }`}
+            >
+              <Subtitles className="w-3.5 h-3.5" />
+              <span>Automatic Subtitles: {subtitlesEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSmartReframing((v) => !v)}
+              className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-colors ${
+                smartReframing
+                  ? 'bg-purple-950/40 border-purple-500/50 text-purple-200'
+                  : 'bg-[#0A0C14] border-[#22283B] text-slate-400'
+              }`}
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+              <span>Smart Reframing: {smartReframing ? 'ON' : 'OFF'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setFaceTracking((v) => !v)}
+              className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-colors ${
+                faceTracking
+                  ? 'bg-blue-950/40 border-blue-500/50 text-blue-200'
+                  : 'bg-[#0A0C14] border-[#22283B] text-slate-400'
+              }`}
+            >
+              <ScanFace className="w-3.5 h-3.5" />
+              <span>Face Tracking: {faceTracking ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
+
+          <button
+            type="button"
+            id="generate-shorts-button"
+            disabled={isGeneratingShorts}
+            onClick={handleGenerateAutomaticShorts}
+            className="inline-flex items-center justify-center gap-2.5 px-7 py-3.5 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 disabled:opacity-60 text-sm font-display font-bold text-white shadow-lg shadow-purple-950/50 transition-all cursor-pointer"
+          >
+            {isGeneratingShorts ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>
+                  {activePipelineStage || 'Processing'} ({pipelineProgressPct}%)
+                </span>
+              </>
             ) : (
-              <div className="p-4 rounded-lg bg-[#0C0E17] border border-[#22283B] text-xs text-slate-400">
-                No video uploaded yet. Upload an MP4/MOV/WebM file from your device or click{' '}
-                <strong className="text-white">Generate Spoken Test MP4</strong> to synthesize a real playable video with spoken English narration.
-              </div>
+              <>
+                <Sparkles className="w-4 h-4" />
+                <span>Generate Shorts</span>
+              </>
             )}
-          </section>
+          </button>
+        </div>
 
+        {/* 10-Stage Real-Time Processing Progress Tracker */}
+        {(isGeneratingShorts || activePipelineStage) && (
+          <div
+            data-testid="shorts-progress-tracker"
+            className="p-4 rounded-xl bg-[#0A0C14] border border-[#252D44] space-y-3"
+          >
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-white flex items-center gap-2">
+                {isGeneratingShorts ? (
+                  <Loader2 className="w-3.5 h-3.5 text-purple-400 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                )}
+                <span>
+                  Pipeline Stage: <strong className="text-purple-300">{activePipelineStage}</strong>
+                </span>
+              </span>
+              <span className="font-mono text-emerald-400">
+                {pipelineProgressPct}%
+              </span>
+            </div>
+
+            <div className="w-full h-2 rounded-full bg-[#121624] overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-purple-500 via-blue-500 to-emerald-400 transition-all duration-300"
+                style={{ width: `${pipelineProgressPct}%` }}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-1.5 pt-1">
+              {SHORTS_PIPELINE_STAGES.map((stage, idx) => {
+                const isDone =
+                  activePipelineStage === 'Completed' ||
+                  (currentStageIndex > idx && currentStageIndex !== -1);
+                const isCurrent =
+                  activePipelineStage === stage &&
+                  activePipelineStage !== 'Completed';
+                return (
+                  <div
+                    key={stage}
+                    className={`px-2 py-1.5 rounded-lg border text-[10px] font-mono flex items-center gap-1.5 ${
+                      isDone
+                        ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-300'
+                        : isCurrent
+                        ? 'bg-purple-950/50 border-purple-400 text-white font-semibold'
+                        : 'bg-[#0E111B] border-[#1D2336] text-slate-500'
+                    }`}
+                  >
+                    {isDone ? (
+                      <Check className="w-3 h-3 text-emerald-400 shrink-0" />
+                    ) : isCurrent ? (
+                      <Loader2 className="w-3 h-3 text-purple-400 animate-spin shrink-0" />
+                    ) : (
+                      <span className="w-3 text-center">{idx + 1}</span>
+                    )}
+                    <span className="truncate">{stage}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* GENERATED SHORTS DASHBOARD */}
+      {activeClips.length > 0 && (
+        <section
+          data-testid="generated-shorts-dashboard"
+          className="rounded-2xl bg-[#10131E] border border-[#1E2436] p-6 space-y-5"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#1C2235] pb-4">
+            <div>
+              <span className="text-[11px] font-mono uppercase text-emerald-400">
+                Generated Shorts Dashboard · PostgreSQL Persisted &amp; FFmpeg Rendered
+              </span>
+              <h2 className="text-lg font-display font-bold text-white">
+                Generated Shorts for &ldquo;{activeVideo?.title}&rdquo; ({activeClips.length})
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('generated-clips')}
+              className="px-3.5 py-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-xs font-semibold text-purple-200 self-start"
+            >
+              View All in Generated Clips Library
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+            {activeClips.map((clip) => {
+              const tags =
+                clip.hashtagsList && clip.hashtagsList.length > 0
+                  ? clip.hashtagsList
+                  : (clip.hashtags || '#Shorts #ClipMatrix #Reels #Viral').split(' ');
+              const isRegenerating = regeneratingClipId === clip.id;
+              const isDeleting = deletingClipId === clip.id;
+
+              return (
+                <div
+                  key={clip.id}
+                  data-testid={`short-card-${clip.id}`}
+                  className="rounded-xl bg-[#0B0E17] border border-[#22283B] p-4 flex flex-col justify-between gap-4"
+                >
+                  <div className="space-y-3">
+                    {/* Top Metadata Bar */}
+                    <div className="flex items-center justify-between gap-2 text-xs font-mono">
+                      <span className="text-purple-400 font-semibold">
+                        Score {clip.viralityScore}/100
+                      </span>
+                      <span className="text-slate-300">
+                        {clip.aspectRatio} · {clip.durationSeconds}s · {clip.startTimecode}–{clip.endTimecode}
+                      </span>
+                    </div>
+
+                    {/* Video Preview with Poster Thumbnail */}
+                    <div className="rounded-lg overflow-hidden bg-black border border-[#1E2538] relative">
+                      <video
+                        ref={(el) => {
+                          clipVideoRefs.current[clip.id] = el;
+                        }}
+                        controls
+                        preload="metadata"
+                        poster={clip.thumbnailUrl}
+                        src={clip.clipUrl}
+                        className="w-full h-64 object-contain bg-black"
+                      />
+                    </div>
+
+                    {/* Thumbnail & Subtitle Status Strip */}
+                    <div className="flex items-center justify-between gap-2 text-[11px] font-mono text-slate-400">
+                      <div className="flex items-center gap-2">
+                        <img
+                          src={clip.thumbnailUrl}
+                          alt={`${clip.title} thumbnail`}
+                          className="w-8 h-8 rounded object-cover border border-[#262F47]"
+                        />
+                        <span>
+                          {clip.subtitlesEnabled !== false
+                            ? `Subtitles: ON (${clip.subtitleStyle || 'bold_hormozi'})`
+                            : 'Subtitles: OFF'}
+                        </span>
+                      </div>
+                      <span className="text-emerald-400">
+                        {formatBytes(clip.fileSizeBytes)}
+                      </span>
+                    </div>
+
+                    {/* Titles, Original Video Title, AI Caption & Hashtags */}
+                    <div className="space-y-1.5">
+                      <h3 className="text-sm font-display font-bold text-white">
+                        {clip.title}
+                      </h3>
+                      <p className="text-[11px] text-slate-400 truncate">
+                        Original Video: <span className="text-slate-200">{activeVideo?.title}</span>
+                      </p>
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        {clip.captionText}
+                      </p>
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {tags.map((tag, i) => (
+                          <span
+                            key={`${clip.id}-tag-${i}`}
+                            className="text-[11px] font-mono text-blue-400"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 5 Required Action Buttons: Play Preview, Download, Edit, Regenerate, Delete */}
+                  <div className="pt-3 border-t border-[#1A2032] flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handlePlayClipPreview(clip.id)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/35 border border-purple-500/40 text-xs font-medium text-purple-200"
+                    >
+                      <Play className="w-3.5 h-3.5" />
+                      <span>Play Preview</span>
+                    </button>
+
+                    <a
+                      href={`/api/clips/${clip.id}/download`}
+                      download
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/40 text-xs font-medium text-emerald-200"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download</span>
+                    </a>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (onSelectClipForStudio) {
+                          onSelectClipForStudio(`db-clip-${clip.id}`);
+                        }
+                        onNavigate('ai-editing');
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#161B2C] hover:bg-[#1F263E] border border-[#262F47] text-xs font-medium text-slate-200"
+                    >
+                      <Wand2 className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Edit</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isRegenerating}
+                      onClick={() => handleRegenerateClip(clip)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#161B2C] hover:bg-[#1F263E] border border-[#262F47] disabled:opacity-50 text-xs font-medium text-blue-300"
+                    >
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 ${isRegenerating ? 'animate-spin' : ''}`}
+                      />
+                      <span>{isRegenerating ? 'Re-Rendering...' : 'Regenerate'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isDeleting}
+                      onClick={() => handleDeleteClip(clip)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/50 border border-red-500/30 disabled:opacity-50 text-xs font-medium text-red-300 ml-auto"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>{isDeleting ? '...' : 'Delete'}</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Detailed Pipeline Workbench & Source Video Inspector */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+        {/* Left 7 Columns: Step-by-Step Inspection & Manual Slicing Controls */}
+        <div className="xl:col-span-7 space-y-6">
           {/* STEP 2: Audio Extraction (FFmpeg) & Local faster-whisper Speech-to-Text */}
           <section className="rounded-xl bg-[#10131E] border border-[#1E2436] p-6 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1C2235] pb-3">
               <div>
                 <span className="text-[11px] font-mono uppercase text-blue-400">
-                  Step 2 · FFmpeg Audio Extraction &amp; Local Faster-Whisper Speech-to-Text
+                  Step-by-Step Control · FFmpeg Audio Extraction &amp; Local Faster-Whisper
                 </span>
                 <h2 className="text-base font-display font-semibold text-white">
-                  Extract 16kHz WAV &amp; Transcribe Speech with faster-whisper
+                  Inspect Speech Transcript &amp; Word Timestamps
                 </h2>
               </div>
               {activeTranscript && (
@@ -863,10 +1627,10 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1C2235] pb-3">
               <div>
                 <span className="text-[11px] font-mono uppercase text-purple-400">
-                  Step 3 · Official Google Gemini API Highlight Analysis
+                  Gemini Highlight Analysis · Model: gemini-4-hydrogen
                 </span>
                 <h2 className="text-base font-display font-semibold text-white">
-                  Detect Viral Moments, Hooks &amp; Scores (0–100)
+                  Detected Viral Moments, Hooks &amp; Timestamps
                 </h2>
               </div>
 
@@ -883,19 +1647,17 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
                 )}
                 <span>
                   {isDetectingHighlights
-                    ? 'Analyzing with Gemini AI...'
+                    ? 'Analyzing with gemini-4-hydrogen...'
                     : activeHighlights.length > 0
                     ? 'Re-Run Gemini Highlight Detection'
-                    : 'Analyze Transcript with Gemini AI'}
+                    : 'Analyze Transcript with Gemini'}
                 </span>
               </button>
             </div>
 
             {activeHighlights.length === 0 ? (
               <div className="p-4 rounded-lg bg-[#0C0E17] border border-[#22283B] text-xs text-slate-400">
-                {activeTranscript
-                  ? 'Click "Analyze Transcript with Gemini AI" to score hooks, emotional peaks, and educational insights from the faster-whisper transcript.'
-                  : 'Complete Step 2 (faster-whisper Speech Transcription) first so Gemini AI can analyze the timestamped speech segments.'}
+                Click <strong className="text-white">Generate Shorts</strong> above to run the full pipeline automatically, or run Step 2 + Step 3 individually to inspect highlights.
               </div>
             ) : (
               <div className="space-y-3">
@@ -985,14 +1747,13 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
           <section className="rounded-xl bg-[#10131E] border border-[#1E2436] p-6 space-y-5">
             <div className="border-b border-[#1C2235] pb-3">
               <span className="text-[11px] font-mono uppercase text-emerald-400">
-                Step 4 · Manual Timestamp Slicing &amp; Real FFmpeg Clip Generation
+                Custom Timestamp Slicing &amp; Batch FFmpeg Clip Generation
               </span>
               <h2 className="text-base font-display font-semibold text-white">
-                Configure Aspect Ratio, Duration &amp; Render Real MP4 Clips
+                Manual Timestamp Selection &amp; Custom Clip Cut
               </h2>
             </div>
 
-            {/* Manual Timestamp Builder */}
             <div className="p-4 rounded-lg bg-[#0C0E17] border border-[#22283B] space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-xs font-semibold text-white">
@@ -1055,17 +1816,26 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
                   <button
                     type="button"
                     onClick={handleAddManualSegmentToQueue}
-                    className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 px-2.5 rounded-lg bg-[#161B2B] hover:bg-[#1E253A] border border-[#262F49] text-xs text-slate-200"
+                    className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 px-2.5 rounded-lg bg-[#161B2B] hover:bg-[#1E253A] border border-[#262F49] text-xs font-medium text-slate-200"
                   >
-                    <Plus className="w-3.5 h-3.5 text-purple-400" />
-                    <span>Queue Range</span>
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Queue</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!activeVideo || isRenderingClips}
+                    onClick={() => handleRenderRealClips('manual_direct')}
+                    className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-xs font-semibold text-white"
+                  >
+                    <Scissors className="w-3.5 h-3.5" />
+                    <span>Cut Now</span>
                   </button>
                 </div>
               </div>
 
               {manualQueue.length > 0 && (
                 <div className="pt-2 space-y-1.5">
-                  <div className="text-[11px] font-mono text-slate-400">
+                  <div className="text-[11px] text-slate-400">
                     Queued Manual Clips ({manualQueue.length}):
                   </div>
                   {manualQueue.map((item) => (
@@ -1073,7 +1843,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
                       key={item.id}
                       className="flex items-center justify-between px-3 py-1.5 rounded bg-[#10131E] border border-[#1E2436] text-xs"
                     >
-                      <span className="text-white truncate">
+                      <span className="text-slate-200">
                         {item.title}{' '}
                         <span className="font-mono text-purple-400">
                           [{item.startTime} – {item.endTime}]
@@ -1083,7 +1853,6 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
                         type="button"
                         onClick={() => handleRemoveManualDraft(item.id)}
                         className="text-slate-400 hover:text-red-400"
-                        aria-label="Remove queued manual range"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -1093,130 +1862,44 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
               )}
             </div>
 
-            {/* Duration & Aspect Ratio Controls */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="block text-xs font-medium text-slate-300">
-                  Target Clip Duration Override
-                </label>
-                <div className="flex flex-wrap gap-1.5">
-                  {(
-                    [
-                      { id: 'exact', label: 'Exact Timestamps' },
-                      { id: 15, label: '15s' },
-                      { id: 30, label: '30s' },
-                      { id: 45, label: '45s' },
-                      { id: 60, label: '60s' },
-                      { id: 'custom', label: 'Custom' },
-                    ] as const
-                  ).map((preset) => (
-                    <button
-                      key={String(preset.id)}
-                      type="button"
-                      onClick={() => setDurationPreset(preset.id as any)}
-                      className={`px-2.5 py-1.5 rounded-lg text-xs font-mono tabular-nums border transition-colors ${
-                        durationPreset === preset.id
-                          ? 'bg-purple-600 text-white border-purple-500'
-                          : 'bg-[#0C0E17] text-slate-300 border-[#22283B] hover:text-white'
-                      }`}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-                {durationPreset === 'custom' && (
-                  <div className="pt-1 flex items-center gap-2">
-                    <input
-                      id="custom-duration-sec"
-                      type="number"
-                      min={5}
-                      max={180}
-                      value={customDuration}
-                      onChange={(e) =>
-                        setCustomDuration(Number(e.target.value))
-                      }
-                      className="w-28 px-3 py-1.5 rounded-lg bg-[#0C0E17] border border-[#22283B] text-xs font-mono tabular-nums text-white"
-                    />
-                    <span className="text-xs text-slate-400">
-                      seconds (5–180s)
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-xs font-medium text-slate-300">
-                  Output Aspect Ratio (FFmpeg Scale &amp; Crop)
-                </label>
-                <div className="flex items-center gap-2">
-                  {(['9:16', '16:9', '1:1'] as AspectRatioPreset[]).map(
-                    (ratio) => (
-                      <button
-                        key={ratio}
-                        type="button"
-                        onClick={() => setAspectRatio(ratio)}
-                        className={`flex-1 py-2 px-3 rounded-lg text-xs font-mono tabular-nums border transition-colors ${
-                          aspectRatio === ratio
-                            ? 'bg-blue-600/25 border-blue-500 text-white font-semibold'
-                            : 'bg-[#0C0E17] border-[#22283B] text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        {ratio}
-                      </button>
-                    )
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Render Action Buttons */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-              <button
-                type="button"
-                disabled={!activeVideo || isRenderingClips}
-                onClick={() => handleRenderRealClips('selected')}
-                className="py-3 px-4 rounded-lg bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 disabled:opacity-50 text-xs font-semibold text-white transition-colors flex items-center justify-center gap-2"
-              >
-                <Scissors className="w-4 h-4" />
-                <span>
-                  {isRenderingClips
-                    ? 'Rendering MP4 Clips with FFmpeg...'
-                    : `Render Selected Highlights & Queue (${
-                        selectedHighlightIds.length + manualQueue.length
-                      })`}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={!activeVideo || isRenderingClips}
-                onClick={() => handleRenderRealClips('manual_direct')}
-                className="py-3 px-4 rounded-lg bg-[#161B2B] hover:bg-[#1E253A] border border-[#262F49] disabled:opacity-50 text-xs font-semibold text-white transition-colors flex items-center justify-center gap-2"
-              >
-                <Clock className="w-4 h-4 text-blue-400" />
-                <span>
-                  Slice Manual Timestamp ({manualStartTime}–{manualEndTime}) Now
-                </span>
-              </button>
-            </div>
+            <button
+              type="button"
+              disabled={
+                !activeVideo ||
+                isRenderingClips ||
+                (selectedHighlightIds.length === 0 && manualQueue.length === 0)
+              }
+              onClick={() => handleRenderRealClips('selected')}
+              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 disabled:opacity-50 text-xs font-semibold text-white flex items-center justify-center gap-2 transition-colors"
+            >
+              <Scissors className="w-4 h-4" />
+              <span>
+                {isRenderingClips
+                  ? 'Rendering Real MP4 Clips & Subtitles via FFmpeg...'
+                  : `Render Selected Clips (${
+                      selectedHighlightIds.length + manualQueue.length
+                    }) in ${aspectRatio} via FFmpeg`}
+              </span>
+            </button>
           </section>
         </div>
 
-        {/* Right 5 Columns: Real HTML5 Video Player, Recently Rendered MP4s & Video Queue */}
+        {/* Right 5 Columns: Real HTML5 Source Video Player & FFprobe Metadata */}
         <div className="xl:col-span-5 space-y-6">
-          {/* Live Source Video Player */}
           <div className="rounded-xl bg-[#10131E] border border-[#1E2436] p-5 space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-display font-semibold text-white">
-                Source Video Monitor &amp; Timestamp Seeker
-              </h2>
-              <span className="text-xs font-mono tabular-nums text-purple-400">
-                Target: {aspectRatio}
+              <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                Source Video Player &amp; FFprobe Telemetry
               </span>
+              {activeVideo && (
+                <span className="text-xs font-mono text-emerald-400">
+                  {activeVideo.width}×{activeVideo.height} · {activeVideo.fps}fps
+                </span>
+              )}
             </div>
 
             {activeVideo ? (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <div className="rounded-lg overflow-hidden bg-black border border-[#22283B]">
                   <video
                     ref={videoPreviewRef}
@@ -1224,123 +1907,74 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
                     controls
                     preload="metadata"
                     src={activeVideo.videoUrl}
-                    className="w-full max-h-[280px] object-contain bg-black"
+                    className="w-full max-h-72 object-contain bg-black"
                   />
                 </div>
-                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
-                  <span>{activeVideo.originalFilename}</span>
-                  <span>
-                    {activeVideo.width}×{activeVideo.height} ·{' '}
-                    {activeVideo.durationSeconds}s
-                  </span>
+                <div className="grid grid-cols-3 gap-2 text-[11px] font-mono text-slate-400">
+                  <div className="p-2 rounded bg-[#0C0E17] border border-[#1E2436]">
+                    <span className="block text-slate-500">Duration</span>
+                    <span className="text-white">{activeVideo.durationSeconds}s</span>
+                  </div>
+                  <div className="p-2 rounded bg-[#0C0E17] border border-[#1E2436]">
+                    <span className="block text-slate-500">Codecs</span>
+                    <span className="text-white">
+                      {activeVideo.videoCodec}/{activeVideo.audioCodec}
+                    </span>
+                  </div>
+                  <div className="p-2 rounded bg-[#0C0E17] border border-[#1E2436]">
+                    <span className="block text-slate-500">Size</span>
+                    <span className="text-white">
+                      {formatBytes(activeVideo.fileSizeBytes)}
+                    </span>
+                  </div>
                 </div>
               </div>
             ) : (
               <div className="p-8 rounded-lg bg-[#0C0E17] border border-[#22283B] text-center text-xs text-slate-400">
-                Upload or synthesize a video in Step 1 to preview and scrub timestamps here.
+                Upload a video or click <strong className="text-white">Generate Spoken Test MP4</strong> to preview the source stream here.
               </div>
             )}
           </div>
 
-          {/* Newly Rendered FFmpeg Clips Preview */}
-          {(latestRenderedClips.length > 0 ||
-            (activeVideo && activeVideo.clips && activeVideo.clips.length > 0)) && (
-            <div className="rounded-xl bg-[#10131E] border border-[#1E2436] p-5 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-display font-semibold text-white">
-                  Rendered FFmpeg MP4 Clips (
-                  {
-                    (latestRenderedClips.length > 0
-                      ? latestRenderedClips
-                      : activeVideo?.clips || []
-                    ).length
-                  }
-                  )
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => onNavigate('generated-clips')}
-                  className="text-xs text-purple-400 hover:underline"
-                >
-                  Open Library
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                {(latestRenderedClips.length > 0
-                  ? latestRenderedClips
-                  : activeVideo?.clips || []
-                )
-                  .slice(0, 3)
-                  .map((clip) => (
-                    <div
-                      key={clip.id}
-                      className="p-3.5 rounded-lg bg-[#0C0E17] border border-[#22283B] space-y-2.5"
-                    >
-                      <div className="flex items-center justify-between gap-2 text-xs">
-                        <span className="font-semibold text-white truncate">
-                          {clip.title}
-                        </span>
-                        <span className="font-mono text-purple-400 shrink-0">
-                          {clip.aspectRatio} · {clip.durationSeconds}s
-                        </span>
-                      </div>
-
-                      <video
-                        controls
-                        preload="metadata"
-                        poster={clip.thumbnailUrl}
-                        src={clip.clipUrl}
-                        className="w-full max-h-56 rounded bg-black border border-[#1E2436]"
-                      />
-
-                      <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
-                        <span>
-                          {clip.startTimecode}–{clip.endTimecode} ·{' '}
-                          {formatBytes(clip.fileSizeBytes)}
-                        </span>
-                        <a
-                          href={`/api/clips/${clip.id}/download`}
-                          download
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-purple-600 hover:bg-purple-500 text-white font-sans font-medium"
-                        >
-                          <Download className="w-3 h-3" />
-                          <span>Download MP4</span>
-                        </a>
-                      </div>
+          {/* Processing Jobs Log from PostgreSQL */}
+          {activeVideo && activeVideo.jobs && activeVideo.jobs.length > 0 && (
+            <div className="rounded-xl bg-[#10131E] border border-[#1E2436] p-5 space-y-3">
+              <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                PostgreSQL Processing Job History ({activeVideo.jobs.length})
+              </h3>
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {activeVideo.jobs.map((job) => (
+                  <div
+                    key={job.id}
+                    className="p-2.5 rounded-lg bg-[#0C0E17] border border-[#22283B] text-xs flex items-center justify-between gap-2"
+                  >
+                    <div>
+                      <span className="font-mono text-purple-400 uppercase">
+                        [{job.jobType}]
+                      </span>{' '}
+                      <span className="text-slate-200">{job.currentStep}</span>
+                      {job.errorMessage && (
+                        <p className="text-red-400 text-[11px] mt-0.5">
+                          {job.errorMessage}
+                        </p>
+                      )}
                     </div>
-                  ))}
+                    <span
+                      className={`text-[11px] font-mono shrink-0 ${
+                        job.status === 'completed'
+                          ? 'text-emerald-400'
+                          : job.status === 'failed'
+                          ? 'text-red-400'
+                          : 'text-amber-400'
+                      }`}
+                    >
+                      {job.status.toUpperCase()} ({job.progressPercent}%)
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           )}
-
-          {/* Video Queue */}
-          <div className="rounded-xl bg-[#10131E] border border-[#1E2436] p-5 space-y-3">
-            <h3 className="text-xs font-display font-semibold text-slate-300">
-              Ingested Video Queue ({projects.length})
-            </h3>
-            <div className="divide-y divide-[#1A1F30]">
-              {projects.slice(0, 6).map((p) => (
-                <div
-                  key={p.id}
-                  className="py-2.5 flex items-center justify-between gap-2 text-xs"
-                >
-                  <div className="truncate">
-                    <div className="font-medium text-white truncate">
-                      {p.title}
-                    </div>
-                    <div className="text-slate-500 font-mono">
-                      {p.aspectRatio} · {p.durationFormatted} · {p.clipsCount}{' '}
-                      clips
-                    </div>
-                  </div>
-                  <span className="font-mono text-emerald-400 shrink-0">
-                    {p.isRealVideo ? 'verified' : p.status}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
     </div>

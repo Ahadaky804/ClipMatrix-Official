@@ -22,7 +22,13 @@ else:
         database=settings.SQL_DB_NAME,
     )
 
-engine = create_engine(db_url, pool_pre_ping=True, pool_size=10, max_overflow=20)
+engine = create_engine(
+    db_url,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
+    connect_args={"connect_timeout": 5},
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

@@ -31,3 +31,10 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=exc.status_code,
             content={"error": exc.message},
         )
+
+    @app.exception_handler(Exception)
+    async def handle_unexpected_error(_request: Request, exc: Exception):
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Backend error: {str(exc)}"},
+        )

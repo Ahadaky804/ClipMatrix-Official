@@ -13,6 +13,7 @@ def init_storage_dirs() -> None:
     settings.AUDIO_DIR.mkdir(parents=True, exist_ok=True)
     settings.CLIPS_DIR.mkdir(parents=True, exist_ok=True)
     settings.THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+    settings.SUBTITLES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 async def save_uploaded_video(upload_file: UploadFile) -> tuple[str, Path, int]:

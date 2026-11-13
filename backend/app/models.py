@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, Text
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -9,9 +9,9 @@ from .database import Base
 class User(Base):
     __tablename__ = "users"
 
-    uid = Column(Text, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True)
+    uid = Column(Text, unique=True, nullable=False, index=True)
     email = Column(Text, nullable=False)
-    display_name = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -21,6 +21,8 @@ class Video(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_uid = Column(Text, nullable=False, default="clipmatrix-personal-owner")
     title = Column(Text, nullable=False)
+    source_type = Column(Text, nullable=False, default="local_upload")
+    source_url = Column(Text, nullable=True)
     original_filename = Column(Text, nullable=False)
     stored_filename = Column(Text, nullable=False)
     video_url = Column(Text, nullable=False)
@@ -47,6 +49,8 @@ class Video(Base):
             "id": self.id,
             "userUid": self.user_uid,
             "title": self.title,
+            "sourceType": self.source_type or "local_upload",
+            "sourceUrl": self.source_url,
             "originalFilename": self.original_filename,
             "storedFilename": self.stored_filename,
             "videoUrl": self.video_url,
@@ -147,16 +151,28 @@ class GeneratedClip(Base):
     end_timecode = Column(Text, nullable=False)
     clip_url = Column(Text, nullable=False)
     thumbnail_url = Column(Text, nullable=False)
+    subtitle_url = Column(Text, nullable=True)
     file_size_bytes = Column(Integer, nullable=False)
     virality_score = Column(Integer, nullable=False, default=85)
     approval_status = Column(Text, nullable=False, default="pending_approval")
     caption_text = Column(Text, nullable=False)
+    hashtags = Column(Text, nullable=False, default="#Shorts #ClipMatrix #Reels #Viral")
     caption_language = Column(Text, nullable=False, default="english")
+    subtitles_enabled = Column(Integer, nullable=False, default=1)
+    subtitle_style = Column(Text, nullable=False, default="bold_hormozi")
+    smart_reframing = Column(Integer, nullable=False, default=1)
+    face_tracking = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     video = relationship("Video", back_populates="generated_clips")
 
     def to_camel_dict(self) -> Dict[str, Any]:
+        raw_tags = (self.hashtags or "#Shorts #ClipMatrix #Reels #Viral").strip()
+        tags_list: List[str] = [
+            t if t.startswith("#") else f"#{t}"
+            for t in raw_tags.replace(",", " ").split()
+            if t.strip()
+        ]
         return {
             "id": self.id,
             "videoId": self.video_id,
@@ -170,11 +186,18 @@ class GeneratedClip(Base):
             "endTimecode": self.end_timecode,
             "clipUrl": self.clip_url,
             "thumbnailUrl": self.thumbnail_url,
+            "subtitleUrl": self.subtitle_url,
             "fileSizeBytes": self.file_size_bytes,
             "viralityScore": self.virality_score,
             "approvalStatus": self.approval_status,
             "captionText": self.caption_text,
+            "hashtags": raw_tags,
+            "hashtagsList": tags_list,
             "captionLanguage": self.caption_language,
+            "subtitlesEnabled": bool(self.subtitles_enabled),
+            "subtitleStyle": self.subtitle_style or "bold_hormozi",
+            "smartReframing": bool(self.smart_reframing),
+            "faceTracking": bool(self.face_tracking),
             "createdAt": self.created_at.isoformat() + "Z" if self.created_at else "",
         }
 

@@ -3,7 +3,6 @@ import {
   AIEditConfig,
   ApprovalStatus,
   AspectRatioPreset,
-  BackendClipRecord,
   BackendVideoRecord,
   CaptionLanguage,
   CaptionOption,
@@ -16,6 +15,7 @@ import {
   SocialAccount,
   StreamerProfile,
   VideoProject,
+  VideoSourceType,
 } from './types/clipmatrix';
 import {
   INITIAL_ANALYTICS,
@@ -117,8 +117,8 @@ export default function App() {
       id: `db-video-${v.id}`,
       dbId: v.id,
       title: v.title,
-      sourceType: 'local_upload',
-      sourceUrlOrFile: v.originalFilename,
+      sourceType: (v.sourceType as VideoSourceType) || 'local_upload',
+      sourceUrlOrFile: v.sourceUrl || v.originalFilename,
       durationFormatted: formatSeconds(v.durationSeconds),
       createdAt: new Date(v.createdAt).toLocaleTimeString([], {
         hour: '2-digit',
@@ -155,7 +155,7 @@ export default function App() {
           projectId: `db-video-${v.id}`,
           projectTitle: v.title,
           title: c.title,
-          sourceType: 'local_upload',
+          sourceType: (v.sourceType as VideoSourceType) || 'local_upload',
           durationSeconds: c.durationSeconds,
           aspectRatio: c.aspectRatio || '9:16',
           startTimecode: c.startTimecode,
@@ -164,6 +164,7 @@ export default function App() {
           endSeconds: c.endSeconds,
           clipUrl: c.clipUrl,
           thumbnailUrl: c.thumbnailUrl,
+          subtitleUrl: c.subtitleUrl,
           fileSizeBytes: c.fileSizeBytes,
           isRealClip: true,
           viralityScore: c.viralityScore,
@@ -173,21 +174,30 @@ export default function App() {
             'pending_approval',
           targetPlatforms: ['youtube', 'tiktok', 'instagram'],
           captionText: localOverride.captionText ?? c.captionText,
+          hashtags: c.hashtags || '#Shorts #ClipMatrix #Reels #Viral',
+          hashtagsList:
+            c.hashtagsList && c.hashtagsList.length > 0
+              ? c.hashtagsList
+              : ['#Shorts', '#ClipMatrix', '#Reels', '#Viral'],
           captionLanguage:
             (localOverride.captionLanguage as CaptionLanguage) ||
             (c.captionLanguage as CaptionLanguage) ||
             'english',
+          subtitlesEnabled: c.subtitlesEnabled ?? true,
+          subtitleStyle: c.subtitleStyle || 'bold_hormozi',
+          smartReframing: c.smartReframing ?? true,
+          faceTracking: c.faceTracking ?? true,
           createdAt: new Date(c.createdAt).toLocaleTimeString([], {
             hour: '2-digit',
             minute: '2-digit',
           }),
           speakerLabel: 'Verified FFmpeg Cut',
           editConfig: localOverride.editConfig || {
-            subtitlesEnabled: true,
+            subtitlesEnabled: c.subtitlesEnabled ?? true,
             subtitleFont: 'Plus Jakarta Sans',
             subtitlePosition: 'bottom',
-            smartReframing: true,
-            faceTracking: true,
+            smartReframing: c.smartReframing ?? true,
+            faceTracking: c.faceTracking ?? true,
             autoZoomKeyframes: true,
             zoomIntensity: 'dynamic',
             backgroundMusicTrack: 'Original Source Audio',
@@ -242,6 +252,8 @@ export default function App() {
       approvalStatus: 'pending_approval',
       targetPlatforms: ['youtube', 'tiktok'],
       captionText: `🔥⚡ Instant live buffer clip from ${session.streamerName}: "${spikeLabel}" #ClipMatrix #LiveClips`,
+      hashtags: '#ClipMatrix #LiveClips #Shorts #StreamHighlights',
+      hashtagsList: ['#ClipMatrix', '#LiveClips', '#Shorts', '#StreamHighlights'],
       captionLanguage: 'english',
       createdAt: 'Just now',
       speakerLabel: session.streamerName,
@@ -309,6 +321,16 @@ export default function App() {
   const handleExtractPodcastSegment = (clip: GeneratedClip) => {
     setSampleClips((prev) => [clip, ...prev]);
     setSelectedClipId(clip.id);
+  };
+
+  // Handlers for Deleting & Regenerating Clips
+  const handleDeleteClip = async (clip: GeneratedClip) => {
+    if (clip.dbId) {
+      await fetch(`/api/clips/${clip.dbId}`, { method: 'DELETE' });
+      await refreshWorkspace();
+    } else {
+      setSampleClips((prev) => prev.filter((c) => c.id !== clip.id));
+    }
   };
 
   // Handlers for AI Editing Studio
@@ -571,6 +593,7 @@ export default function App() {
               backendVideos={backendVideos}
               onRefreshWorkspace={refreshWorkspace}
               onCreateProjectAndClips={handleCreateProjectAndClips}
+              onSelectClipForStudio={setSelectedClipId}
               onNavigate={setActivePage}
             />
           )}
@@ -597,6 +620,8 @@ export default function App() {
             <GeneratedClipsPage
               clips={clips}
               onSelectClipForStudio={setSelectedClipId}
+              onRefreshWorkspace={refreshWorkspace}
+              onDeleteClip={handleDeleteClip}
               onNavigate={setActivePage}
             />
           )}

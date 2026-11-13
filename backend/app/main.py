@@ -2,16 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from .config import settings
-from .database import Base, engine
 from .errors import register_exception_handlers
 from .routes.api import router as api_router
 from .storage import init_storage_dirs
 
 init_storage_dirs()
-try:
-    Base.metadata.create_all(bind=engine)
-except Exception as exc:
-    print(f"Warning: SQLAlchemy create_all notice: {exc}")
 
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
 

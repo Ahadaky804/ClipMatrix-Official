@@ -20,11 +20,19 @@ export type VideoSourceType =
   | 'livestream_recording'
   | 'podcast_video';
 
+export type NumberOfShortsOption = 3 | 5 | 10 | 'auto';
+
 export type ClipDurationPreset = 15 | 30 | 45 | 60 | 'custom';
 
 export type AspectRatioPreset = '9:16' | '16:9' | '1:1';
 
 export type ClipDetectionMode = 'auto_highlight' | 'manual_timestamp';
+
+export type SubtitleStylePreset =
+  | 'bold_hormozi'
+  | 'clean_studio'
+  | 'neon_viral'
+  | 'editorial_top';
 
 export type CaptionStyle =
   | 'funny'
@@ -34,7 +42,12 @@ export type CaptionStyle =
   | 'motivational'
   | 'storytelling';
 
-export type CaptionLanguage = 'english' | 'urdu' | 'roman_urdu';
+export type CaptionLanguage =
+  | 'english'
+  | 'urdu'
+  | 'roman_urdu'
+  | 'spanish'
+  | 'arabic';
 
 export type CaptionLength = 'short' | 'medium' | 'long';
 
@@ -142,13 +155,20 @@ export interface GeneratedClip {
   endSeconds?: number;
   clipUrl?: string;
   thumbnailUrl?: string;
+  subtitleUrl?: string | null;
   fileSizeBytes?: number;
   isRealClip?: boolean;
   viralityScore: number;
   approvalStatus: ApprovalStatus;
   targetPlatforms: SocialPlatform[];
   captionText: string;
+  hashtags?: string;
+  hashtagsList?: string[];
   captionLanguage: CaptionLanguage;
+  subtitlesEnabled?: boolean;
+  subtitleStyle?: SubtitleStylePreset;
+  smartReframing?: boolean;
+  faceTracking?: boolean;
   createdAt: string;
   scheduledFor?: string;
   publishedAt?: string;
@@ -205,11 +225,18 @@ export interface BackendClipRecord {
   endTimecode: string;
   clipUrl: string;
   thumbnailUrl: string;
+  subtitleUrl?: string | null;
   fileSizeBytes: number;
   viralityScore: number;
   approvalStatus: ApprovalStatus;
   captionText: string;
+  hashtags?: string;
+  hashtagsList?: string[];
   captionLanguage: CaptionLanguage;
+  subtitlesEnabled?: boolean;
+  subtitleStyle?: SubtitleStylePreset;
+  smartReframing?: boolean;
+  faceTracking?: boolean;
   createdAt: string;
 }
 
@@ -223,12 +250,15 @@ export interface BackendJobRecord {
   errorMessage: string | null;
   resultMetaJson: string | null;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface BackendVideoRecord {
   id: number;
   userUid: string;
   title: string;
+  sourceType?: VideoSourceType;
+  sourceUrl?: string | null;
   originalFilename: string;
   storedFilename: string;
   videoUrl: string;

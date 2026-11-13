@@ -177,9 +177,8 @@ export function filterClips(
   });
 }
 
-const STYLE_TEMPLATES: Record<
-  CaptionLanguage,
-  Record<CaptionStyle, string[]>
+const STYLE_TEMPLATES: Partial<
+  Record<CaptionLanguage, Record<CaptionStyle, string[]>>
 > = {
   english: {
     viral: [
@@ -385,7 +384,8 @@ export function generateCaptionBatch(params: {
   } = params;
 
   const boundedCount = Math.min(10, Math.max(5, count));
-  const templates = STYLE_TEMPLATES[language][style];
+  const langPack = STYLE_TEMPLATES[language] || STYLE_TEMPLATES.english!;
+  const templates = langPack[style];
   const emojiPrefix = includeEmojis ? `${EMOJI_MAP[style]} ` : '';
 
   const baseHashtags = includeHashtags
