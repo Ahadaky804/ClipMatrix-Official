@@ -89,6 +89,7 @@ export interface LiveStreamSession {
 
 export interface VideoProject {
   id: string;
+  dbId?: number;
   title: string;
   sourceType: VideoSourceType;
   sourceUrlOrFile: string;
@@ -98,6 +99,16 @@ export interface VideoProject {
   clipsCount: number;
   aspectRatio: AspectRatioPreset;
   detectionMode: ClipDetectionMode;
+  videoUrl?: string;
+  audioUrl?: string | null;
+  width?: number;
+  height?: number;
+  fps?: number;
+  videoCodec?: string;
+  audioCodec?: string;
+  fileSizeBytes?: number;
+  durationSeconds?: number;
+  isRealVideo?: boolean;
 }
 
 export interface AIEditConfig {
@@ -117,6 +128,8 @@ export interface AIEditConfig {
 
 export interface GeneratedClip {
   id: string;
+  dbId?: number;
+  videoId?: number;
   projectId: string;
   projectTitle: string;
   title: string;
@@ -125,6 +138,12 @@ export interface GeneratedClip {
   aspectRatio: AspectRatioPreset;
   startTimecode: string;
   endTimecode: string;
+  startSeconds?: number;
+  endSeconds?: number;
+  clipUrl?: string;
+  thumbnailUrl?: string;
+  fileSizeBytes?: number;
+  isRealClip?: boolean;
   viralityScore: number;
   approvalStatus: ApprovalStatus;
   targetPlatforms: SocialPlatform[];
@@ -136,6 +155,99 @@ export interface GeneratedClip {
   reviewerNotes?: string;
   speakerLabel?: string;
   editConfig: AIEditConfig;
+}
+
+export interface BackendTranscriptSegment {
+  id: number;
+  startSeconds: number;
+  endSeconds: number;
+  startTimecode: string;
+  endTimecode: string;
+  text: string;
+}
+
+export interface BackendTranscriptRecord {
+  id: number;
+  videoId: number;
+  engineUsed: string;
+  modelSize: string;
+  language: string;
+  fullText: string;
+  segments: BackendTranscriptSegment[];
+  createdAt: string;
+}
+
+export interface BackendHighlightRecord {
+  id: number;
+  videoId: number;
+  transcriptId: number | null;
+  title: string;
+  reason: string;
+  category: string;
+  startSeconds: number;
+  endSeconds: number;
+  startTimecode: string;
+  endTimecode: string;
+  score: number;
+  createdAt: string;
+}
+
+export interface BackendClipRecord {
+  id: number;
+  videoId: number;
+  highlightId: number | null;
+  title: string;
+  aspectRatio: AspectRatioPreset;
+  durationSeconds: number;
+  startSeconds: number;
+  endSeconds: number;
+  startTimecode: string;
+  endTimecode: string;
+  clipUrl: string;
+  thumbnailUrl: string;
+  fileSizeBytes: number;
+  viralityScore: number;
+  approvalStatus: ApprovalStatus;
+  captionText: string;
+  captionLanguage: CaptionLanguage;
+  createdAt: string;
+}
+
+export interface BackendJobRecord {
+  id: number;
+  videoId: number;
+  jobType: string;
+  status: string;
+  progressPercent: number;
+  currentStep: string;
+  errorMessage: string | null;
+  resultMetaJson: string | null;
+  createdAt: string;
+}
+
+export interface BackendVideoRecord {
+  id: number;
+  userUid: string;
+  title: string;
+  originalFilename: string;
+  storedFilename: string;
+  videoUrl: string;
+  audioUrl: string | null;
+  fileSizeBytes: number;
+  mimeType: string;
+  durationSeconds: number;
+  width: number;
+  height: number;
+  fps: number;
+  videoCodec: string;
+  audioCodec: string;
+  status: string;
+  errorMessage: string | null;
+  createdAt: string;
+  transcript: BackendTranscriptRecord | null;
+  highlights: BackendHighlightRecord[];
+  clips: BackendClipRecord[];
+  jobs: BackendJobRecord[];
 }
 
 export interface PodcastSpeakerSegment {

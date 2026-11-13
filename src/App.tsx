@@ -1,8 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   AIEditConfig,
   ApprovalStatus,
   AspectRatioPreset,
+  BackendClipRecord,
+  BackendVideoRecord,
   CaptionLanguage,
   CaptionOption,
   GeneratedClip,
@@ -48,15 +50,31 @@ import { UploadApprovalPage } from './pages/UploadApprovalPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { SettingsPage } from './pages/SettingsPage';
 
+function formatSeconds(sec: number): string {
+  const safe = Math.max(0, Math.floor(Number(sec) || 0));
+  const m = Math.floor(safe / 60);
+  const s = safe % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
 export default function App() {
   const [activePage, setActivePage] = useState<NavigationPageId>('overview');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Core Workspace State (Sample Data separated from backend service layer)
-  const [projects, setProjects] = useState<VideoProject[]>(INITIAL_PROJECTS);
-  const [clips, setClips] = useState<GeneratedClip[]>(INITIAL_CLIPS);
+  // Real Backend PostgreSQL State
+  const [backendVideos, setBackendVideos] = useState<BackendVideoRecord[]>([]);
+
+  // Core Workspace State (Real PostgreSQL items merged ahead of Phase 1 sample items)
+  const [sampleProjects, setSampleProjects] =
+    useState<VideoProject[]>(INITIAL_PROJECTS);
+  const [sampleClips, setSampleClips] =
+    useState<GeneratedClip[]>(INITIAL_CLIPS);
+  const [dbClipOverrides, setDbClipOverrides] = useState<
+    Record<string, Partial<GeneratedClip>>
+  >({});
+
   const [streamers, setStreamers] = useState<StreamerProfile[]>(INITIAL_STREAMERS);
   const [liveSessions, setLiveSessions] = useState<LiveStreamSession[]>(
     INITIAL_LIVE_SESSIONS
@@ -76,6 +94,114 @@ export default function App() {
   const [selectedClipId, setSelectedClipId] = useState<string>(
     INITIAL_CLIPS[0]?.id || ''
   );
+
+  const refreshWorkspace = useCallback(async () => {
+    try {
+      const res = await fetch('/api/workspace');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.videos)) {
+        setBackendVideos(data.videos);
+      }
+    } catch (err) {
+      console.error('Workspace sync warning:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshWorkspace();
+  }, [refreshWorkspace]);
+
+  const projects: VideoProject[] = useMemo(() => {
+    const realProjects: VideoProject[] = backendVideos.map((v) => ({
+      id: `db-video-${v.id}`,
+      dbId: v.id,
+      title: v.title,
+      sourceType: 'local_upload',
+      sourceUrlOrFile: v.originalFilename,
+      durationFormatted: formatSeconds(v.durationSeconds),
+      createdAt: new Date(v.createdAt).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+      status: 'ready',
+      clipsCount: v.clips?.length || 0,
+      aspectRatio: '9:16',
+      detectionMode: 'auto_highlight',
+      videoUrl: v.videoUrl,
+      audioUrl: v.audioUrl,
+      width: v.width,
+      height: v.height,
+      fps: v.fps,
+      videoCodec: v.videoCodec,
+      audioCodec: v.audioCodec,
+      fileSizeBytes: v.fileSizeBytes,
+      durationSeconds: v.durationSeconds,
+      isRealVideo: true,
+    }));
+    return [...realProjects, ...sampleProjects];
+  }, [backendVideos, sampleProjects]);
+
+  const clips: GeneratedClip[] = useMemo(() => {
+    const realClips: GeneratedClip[] = [];
+    for (const v of backendVideos) {
+      for (const c of v.clips || []) {
+        const clipKey = `db-clip-${c.id}`;
+        const localOverride = dbClipOverrides[clipKey] || {};
+        realClips.push({
+          id: clipKey,
+          dbId: c.id,
+          videoId: v.id,
+          projectId: `db-video-${v.id}`,
+          projectTitle: v.title,
+          title: c.title,
+          sourceType: 'local_upload',
+          durationSeconds: c.durationSeconds,
+          aspectRatio: c.aspectRatio || '9:16',
+          startTimecode: c.startTimecode,
+          endTimecode: c.endTimecode,
+          startSeconds: c.startSeconds,
+          endSeconds: c.endSeconds,
+          clipUrl: c.clipUrl,
+          thumbnailUrl: c.thumbnailUrl,
+          fileSizeBytes: c.fileSizeBytes,
+          isRealClip: true,
+          viralityScore: c.viralityScore,
+          approvalStatus:
+            (localOverride.approvalStatus as ApprovalStatus) ||
+            (c.approvalStatus as ApprovalStatus) ||
+            'pending_approval',
+          targetPlatforms: ['youtube', 'tiktok', 'instagram'],
+          captionText: localOverride.captionText ?? c.captionText,
+          captionLanguage:
+            (localOverride.captionLanguage as CaptionLanguage) ||
+            (c.captionLanguage as CaptionLanguage) ||
+            'english',
+          createdAt: new Date(c.createdAt).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+          speakerLabel: 'Verified FFmpeg Cut',
+          editConfig: localOverride.editConfig || {
+            subtitlesEnabled: true,
+            subtitleFont: 'Plus Jakarta Sans',
+            subtitlePosition: 'bottom',
+            smartReframing: true,
+            faceTracking: true,
+            autoZoomKeyframes: true,
+            zoomIntensity: 'dynamic',
+            backgroundMusicTrack: 'Original Source Audio',
+            musicVolume: 0,
+            sfxEnabled: false,
+            selectedThumbnailTimecode: c.startTimecode,
+            thumbnailHeadline: c.title.toUpperCase().slice(0, 26),
+          },
+          ...localOverride,
+        });
+      }
+    }
+    return [...realClips, ...sampleClips];
+  }, [backendVideos, sampleClips, dbClipOverrides]);
 
   const stats = useMemo(
     () =>
@@ -135,7 +261,7 @@ export default function App() {
       },
     };
 
-    setClips((prev) => [newClip, ...prev]);
+    setSampleClips((prev) => [newClip, ...prev]);
     setSelectedClipId(newClip.id);
   };
 
@@ -173,15 +299,15 @@ export default function App() {
     project: VideoProject;
     generatedClips: GeneratedClip[];
   }) => {
-    setProjects((prev) => [params.project, ...prev]);
-    setClips((prev) => [...params.generatedClips, ...prev]);
+    setSampleProjects((prev) => [params.project, ...prev]);
+    setSampleClips((prev) => [...params.generatedClips, ...prev]);
     if (params.generatedClips[0]) {
       setSelectedClipId(params.generatedClips[0].id);
     }
   };
 
   const handleExtractPodcastSegment = (clip: GeneratedClip) => {
-    setClips((prev) => [clip, ...prev]);
+    setSampleClips((prev) => [clip, ...prev]);
     setSelectedClipId(clip.id);
   };
 
@@ -191,11 +317,18 @@ export default function App() {
     editConfig: AIEditConfig,
     aspectRatio: AspectRatioPreset
   ) => {
-    setClips((prev) =>
-      prev.map((c) =>
-        c.id === clipId ? { ...c, editConfig, aspectRatio } : c
-      )
-    );
+    if (clipId.startsWith('db-clip-')) {
+      setDbClipOverrides((prev) => ({
+        ...prev,
+        [clipId]: { ...(prev[clipId] || {}), editConfig, aspectRatio },
+      }));
+    } else {
+      setSampleClips((prev) =>
+        prev.map((c) =>
+          c.id === clipId ? { ...c, editConfig, aspectRatio } : c
+        )
+      );
+    }
   };
 
   // Handlers for Caption Studio
@@ -204,13 +337,30 @@ export default function App() {
     captionText: string,
     language: CaptionLanguage
   ) => {
-    setClips((prev) =>
-      prev.map((c) =>
-        c.id === clipId
-          ? { ...c, captionText, captionLanguage: language }
-          : c
-      )
-    );
+    const targetClip = clips.find((c) => c.id === clipId);
+    if (targetClip?.dbId) {
+      setDbClipOverrides((prev) => ({
+        ...prev,
+        [clipId]: {
+          ...(prev[clipId] || {}),
+          captionText,
+          captionLanguage: language,
+        },
+      }));
+      fetch(`/api/clips/${targetClip.dbId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ captionText, captionLanguage: language }),
+      }).catch(() => {});
+    } else {
+      setSampleClips((prev) =>
+        prev.map((c) =>
+          c.id === clipId
+            ? { ...c, captionText, captionLanguage: language }
+            : c
+        )
+      );
+    }
   };
 
   // Handlers for Content Calendar
@@ -265,7 +415,30 @@ export default function App() {
     }
   ) => {
     const targetClip = clips.find((c) => c.id === clipId);
-    setClips((prev) => applyApprovalAction(prev, clipId, status, options));
+    if (targetClip?.dbId) {
+      setDbClipOverrides((prev) => ({
+        ...prev,
+        [clipId]: {
+          ...(prev[clipId] || {}),
+          approvalStatus: status,
+          reviewerNotes: options?.reviewerNotes ?? targetClip.reviewerNotes,
+          scheduledFor: options?.scheduledFor ?? targetClip.scheduledFor,
+          captionText: options?.captionText ?? targetClip.captionText,
+        },
+      }));
+      fetch(`/api/clips/${targetClip.dbId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          approvalStatus: status,
+          captionText: options?.captionText ?? targetClip.captionText,
+        }),
+      }).catch(() => {});
+    } else {
+      setSampleClips((prev) =>
+        applyApprovalAction(prev, clipId, status, options)
+      );
+    }
 
     if (targetClip) {
       const actionMap: Record<
@@ -316,8 +489,9 @@ export default function App() {
   };
 
   const handleResetSampleWorkspace = () => {
-    setProjects(INITIAL_PROJECTS);
-    setClips(INITIAL_CLIPS);
+    setSampleProjects(INITIAL_PROJECTS);
+    setSampleClips(INITIAL_CLIPS);
+    setDbClipOverrides({});
     setStreamers(INITIAL_STREAMERS);
     setLiveSessions(INITIAL_LIVE_SESSIONS);
     setCaptions(INITIAL_CAPTIONS);
@@ -325,6 +499,7 @@ export default function App() {
     setSocialAccounts(INITIAL_SOCIAL_ACCOUNTS);
     setPublishingActivity(INITIAL_PUBLISHING_ACTIVITY);
     setNotifications(INITIAL_NOTIFICATIONS);
+    refreshWorkspace();
   };
 
   return (
@@ -393,6 +568,8 @@ export default function App() {
           {activePage === 'long-video' && (
             <LongVideoToClipsPage
               projects={projects}
+              backendVideos={backendVideos}
+              onRefreshWorkspace={refreshWorkspace}
               onCreateProjectAndClips={handleCreateProjectAndClips}
               onNavigate={setActivePage}
             />

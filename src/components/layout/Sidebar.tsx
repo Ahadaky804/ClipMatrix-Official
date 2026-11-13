@@ -184,21 +184,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })}
         </nav>
 
-        {/* Bottom Architecture Phase Note */}
+        {/* Bottom Studio Note */}
         <div className="p-3 border-t border-[#1C2030]">
           {!collapsed ? (
             <div className="px-2.5 py-2 rounded-lg bg-[#111420] border border-[#1E2436] text-xs text-slate-400 space-y-0.5">
-              <div className="font-medium text-slate-200">Phase 1 Foundation</div>
+              <div className="font-medium text-slate-200">ClipMatrix Studio v2.0</div>
               <div className="text-[11px] text-slate-400">
-                Sample Data · FastAPI &amp; PG Ready
+                AI Video &amp; Clipping Engine
               </div>
             </div>
           ) : (
             <div
               className="text-center text-[10px] font-mono text-slate-400"
-              title="Phase 1 Foundation — Sample Data Active"
+              title="ClipMatrix Studio v2.0"
             >
-              P1
+              v2
             </div>
           )}
         </div>

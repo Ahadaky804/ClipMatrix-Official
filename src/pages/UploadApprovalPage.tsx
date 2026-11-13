@@ -5,7 +5,7 @@ import {
   CalendarClock,
   Edit3,
   Send,
-  ShieldAlert,
+  Download,
 } from 'lucide-react';
 import {
   ApprovalStatus,
@@ -197,26 +197,55 @@ export const UploadApprovalPage: React.FC<UploadApprovalPageProps> = ({
                     {activeClip.title}
                   </h2>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onSelectClipForStudio(activeClip.id);
-                    onNavigate('ai-editing');
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#161B2B] hover:bg-[#1E253A] border border-[#262F49] text-xs text-slate-200 whitespace-nowrap self-start"
-                >
-                  <Edit3 className="w-3.5 h-3.5 text-purple-400" />
-                  <span>Re-open in AI Editing Studio</span>
-                </button>
+                <div className="flex items-center gap-2 self-start">
+                  {activeClip.clipUrl && (
+                    <a
+                      href={
+                        activeClip.dbId
+                          ? `/api/clips/${activeClip.dbId}/download`
+                          : activeClip.clipUrl
+                      }
+                      download
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-xs text-emerald-200 whitespace-nowrap"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download MP4</span>
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectClipForStudio(activeClip.id);
+                      onNavigate('ai-editing');
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#161B2B] hover:bg-[#1E253A] border border-[#262F49] text-xs text-slate-200 whitespace-nowrap"
+                  >
+                    <Edit3 className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Re-open in AI Editing Studio</span>
+                  </button>
+                </div>
               </div>
 
-              <VideoPreviewFrame
-                title={activeClip.title}
-                aspectRatio={activeClip.aspectRatio}
-                timecode={`${activeClip.startTimecode} – ${activeClip.endTimecode}`}
-                speakerLabel={activeClip.speakerLabel || 'Speaker'}
-                subtitleText={activeClip.editConfig.thumbnailHeadline}
-              />
+              {activeClip.clipUrl ? (
+                <div className="rounded-lg overflow-hidden bg-black border border-[#22283B]">
+                  <video
+                    key={activeClip.clipUrl}
+                    controls
+                    preload="metadata"
+                    poster={activeClip.thumbnailUrl}
+                    src={activeClip.clipUrl}
+                    className="w-full max-h-[320px] object-contain bg-black"
+                  />
+                </div>
+              ) : (
+                <VideoPreviewFrame
+                  title={activeClip.title}
+                  aspectRatio={activeClip.aspectRatio}
+                  timecode={`${activeClip.startTimecode} – ${activeClip.endTimecode}`}
+                  speakerLabel={activeClip.speakerLabel || 'Speaker'}
+                  subtitleText={activeClip.editConfig.thumbnailHeadline}
+                />
+              )}
 
               {/* Editable Final Caption & Reviewer Notes */}
               <div className="space-y-3">
@@ -285,7 +314,7 @@ export const UploadApprovalPage: React.FC<UploadApprovalPageProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => triggerAction('published', 'Published Clip (Sample)')}
+                    onClick={() => triggerAction('published', 'Published Clip')}
                     className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-xs font-semibold text-white transition-colors"
                   >
                     <Send className="w-3.5 h-3.5" />

@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import {
-  Scissors,
   Wand2,
   MessageSquareQuote,
   CheckCircle2,
   Search,
   Filter,
+  Download,
 } from 'lucide-react';
 import {
   ApprovalStatus,
@@ -20,6 +20,13 @@ interface GeneratedClipsPageProps {
   clips: GeneratedClip[];
   onSelectClipForStudio: (clipId: string) => void;
   onNavigate: (page: NavigationPageId) => void;
+}
+
+function formatBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 export const GeneratedClipsPage: React.FC<GeneratedClipsPageProps> = ({
@@ -42,13 +49,13 @@ export const GeneratedClipsPage: React.FC<GeneratedClipsPageProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-[#1C2030]">
         <div>
           <div className="text-xs text-purple-400 font-medium">
-            Rendered &amp; Queued Short-Form Asset Library
+            Rendered FFmpeg MP4 Assets &amp; Short-Form Clip Library
           </div>
           <h1 className="text-2xl font-display font-bold text-white">
             Generated Clips ({filtered.length})
           </h1>
           <p className="text-sm text-slate-400">
-            Filter extracted clips by aspect ratio or approval stage, preview framing, or send directly to Caption Studio and Upload Approval.
+            Play real FFmpeg-rendered MP4 clips, download files to your device, filter by aspect ratio or approval status, or send clips to Caption Studio and Upload Approval.
           </p>
         </div>
 
@@ -127,7 +134,7 @@ export const GeneratedClipsPage: React.FC<GeneratedClipsPageProps> = ({
             No Generated Clips Match Your Filters
           </h2>
           <p className="text-xs text-slate-400">
-            Reset the aspect ratio or status filters to inspect all sample clips.
+            Reset the aspect ratio or status filters to inspect all generated clips.
           </p>
           <button
             type="button"
@@ -154,18 +161,36 @@ export const GeneratedClipsPage: React.FC<GeneratedClipsPageProps> = ({
                     Hook {clip.viralityScore}%
                   </span>
                   <span>
-                    {clip.aspectRatio} · {clip.durationSeconds}s · {clip.startTimecode}
+                    {clip.aspectRatio} · {clip.durationSeconds}s · {clip.startTimecode}–{clip.endTimecode}
                   </span>
                 </div>
 
-                <VideoPreviewFrame
-                  title={clip.title}
-                  aspectRatio="16:9"
-                  timecode={`${clip.startTimecode} – ${clip.endTimecode}`}
-                  speakerLabel={`${clip.aspectRatio} Frame · ${clip.speakerLabel || 'Clip'}`}
-                  subtitleText={clip.editConfig.thumbnailHeadline}
-                  compact={true}
-                />
+                {clip.clipUrl ? (
+                  <div className="space-y-1.5">
+                    <div className="rounded-lg overflow-hidden bg-black border border-[#22283B]">
+                      <video
+                        controls
+                        preload="metadata"
+                        poster={clip.thumbnailUrl}
+                        src={clip.clipUrl}
+                        className="w-full h-52 object-contain bg-black"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] font-mono text-emerald-400">
+                      <span>Rendered MP4 · {clip.aspectRatio}</span>
+                      <span>{formatBytes(clip.fileSizeBytes)}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <VideoPreviewFrame
+                    title={clip.title}
+                    aspectRatio="16:9"
+                    timecode={`${clip.startTimecode} – ${clip.endTimecode}`}
+                    speakerLabel={`${clip.aspectRatio} Frame · ${clip.speakerLabel || 'Clip'}`}
+                    subtitleText={clip.editConfig.thumbnailHeadline}
+                    compact={true}
+                  />
+                )}
 
                 <div className="space-y-1">
                   <h3 className="text-sm font-display font-semibold text-white line-clamp-2">
@@ -185,7 +210,21 @@ export const GeneratedClipsPage: React.FC<GeneratedClipsPageProps> = ({
                   Status: {clip.approvalStatus.replace('_', ' ')}
                 </span>
 
-                <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {clip.clipUrl && (
+                    <a
+                      href={
+                        clip.dbId
+                          ? `/api/clips/${clip.dbId}/download`
+                          : clip.clipUrl
+                      }
+                      download
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/40 text-xs text-emerald-200"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download</span>
+                    </a>
+                  )}
                   <button
                     type="button"
                     onClick={() => {

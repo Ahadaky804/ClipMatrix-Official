@@ -1,105 +1,83 @@
-# ClipMatrix — AI-Powered Video Clipping & Publishing Studio (Phase 1 Foundation)
+# ClipMatrix — AI-Powered Video Clipping & Publishing Studio (Phase 2: Real AI Video Processing, Whisper & Gemini Integration)
 
-ClipMatrix is a personal AI video clipping, livestream monitoring, multi-language captioning, and social publishing studio. This repository contains the **Phase 1 Project Foundation**, engineered for clean modularity, strict TypeScript domain contracts, and seamless Phase 2 backend integration.
-
----
-
-## 1. Framework & Environment Documentation (Vite + React vs. Next.js)
-
-- **Runtime Stack Used**: **React 19 + TypeScript + Vite + Tailwind CSS v4 + Lucide Icons**.
-- **Architectural Note on Next.js**: The AI Studio container environment comes pre-configured with a Vite + React SPA runtime (`vite.config.ts`, `index.html`, `src/main.tsx`). Per the Phase 1 specification (*"If the environment does not support Next.js, use its supported React framework and clearly document the difference. Do not break the project trying to force an unsupported framework"*), all 13 studio routes are implemented as modular page components under `src/pages/` with client-side route state, zero-reload transitions, and clean separation between UI components, business logic (`src/utils/clipLogic.ts`), sample data (`src/data/sampleData.ts`), and typed backend service contracts (`src/services/apiContracts.ts`).
+ClipMatrix is a personal AI video clipping, livestream monitoring, multi-language captioning, and social publishing studio. Phase 2 connects the 13-page dark SaaS studio to a real **PostgreSQL** database, **FFmpeg / FFprobe** media processing, **faster-whisper** local transcription, and the official **Google Gemini API** (`@google/genai` / `google-genai`).
 
 ---
 
-## 2. Project Structure
+## 1. Architecture & Dual-Runtime Support
 
+### A. Live Full-Stack AI Studio Runtime (`server.ts` + Cloud SQL PostgreSQL + FFmpeg + Gemini)
+- **Port 3000 Full-Stack Server (`server.ts`)**: Runs Express + Vite middleware, connected directly to the provisioned **Cloud SQL PostgreSQL** instance (`users`, `videos`, `transcripts`, `highlights`, `generated_clips`, `processing_jobs`) via Drizzle ORM (`src/db/schema.ts`, `src/db/index.ts`, `src/db/repository.ts`).
+- **Real Media Engine (`src/server/ffmpegService.ts`)**: Executes `/usr/bin/ffprobe` for video stream verification and `/usr/bin/ffmpeg` for 16kHz mono WAV extraction, frame-accurate MP4 slicing, aspect-ratio smart-cropping (`9:16`, `16:9`, `1:1`), and `.jpg` thumbnail extraction.
+- **Whisper & Audio Transcription (`src/server/transcriptionService.ts` + `backend/scripts/run_faster_whisper.py`)**: Executes local Python `faster-whisper` when installed on the host, with automatic fallback to Gemini audio transcription (`gemini-3-flash-preview`) on the extracted WAV file.
+- **Gemini AI Highlight Detection (`src/server/geminiHighlightService.ts`)**: Analyzes timestamped transcripts via `@google/genai` (`gemini-3-flash-preview`) with strict JSON schema validation to detect viral hooks, emotional peaks, and educational insights with 0–100 virality scores.
+
+### B. Standalone Python FastAPI + Celery + Redis Backend (`/backend/*`)
+For self-hosted deployments with GPU/CPU Celery workers:
 ```text
-/
-├── index.html                           # Entry HTML with Plus Jakarta Sans, DM Sans & JetBrains Mono
-├── metadata.json                        # Application metadata
-├── package.json                         # Scripts and dependencies
-├── src/
-│   ├── main.tsx                         # React DOM root
-│   ├── index.css                        # Tailwind CSS v4 + dark theme & tabular numeral rules
-│   ├── App.tsx                          # Root studio shell & 13-page state orchestrator
-│   ├── types/
-│   │   └── clipmatrix.ts                # Core TypeScript domain models & PostgreSQL-ready types
-│   ├── services/
-│   │   └── apiContracts.ts              # Prepared service interfaces (FastAPI, PostgreSQL, Gemini, Whisper, FFmpeg, Redis/Celery)
-│   ├── data/
-│   │   └── sampleData.ts                # Clearly separated Phase 1 sample datasets
-│   ├── utils/
-│   │   ├── clipLogic.ts                 # Pure logic for stats, validation, filtering & multi-language captions
-│   │   └── clipLogic.test.ts            # Node built-in unit test suite (node:test)
-│   ├── components/
-│   │   ├── brand/
-│   │   │   └── ClipMatrixLogo.tsx       # Custom filmstrip + play-button vector logo
-│   │   ├── common/
-│   │   │   └── VideoPreviewFrame.tsx    # Interactive 9:16, 16:9 & 1:1 studio canvas with face-tracking & subtitles
-│   │   └── layout/
-│   │       ├── Sidebar.tsx              # Collapsible 13-route sidebar + mobile drawer
-│   │       └── TopNavbar.tsx            # Global search dropdown, notifications & profile menu
-│   └── pages/
-│       ├── OverviewPage.tsx             # 1. Overview Dashboard (6 KPIs, recent projects/clips, streamers, activity)
-│       ├── LiveStreamsPage.tsx          # 2. Live Streams (rolling buffer & spike extraction)
-│       ├── MyStreamersPage.tsx          # 3. My Streamers (LIVE/OFFLINE roster, pause/remove, notifications)
-│       ├── LongVideoToClipsPage.tsx     # 4. Long Video to Clips (Local, YouTube, Drive, VODs; 15/30/45/60s/Custom; 9:16, 16:9, 1:1)
-│       ├── PodcastClipsPage.tsx         # 5. Podcast Clips (Speaker diarization & 9:16 split-screen framing)
-│       ├── AIEditingStudioPage.tsx      # 6. AI Editing Studio (Subtitles, reframing, face tracking, zoom, music/SFX, thumbnails)
-│       ├── GeneratedClipsPage.tsx       # 7. Generated Clips (Filterable asset library)
-│       ├── CaptionStudioPage.tsx        # 8. Caption Studio (5–10 options, 6 styles, English/Urdu/Roman Urdu, emoji/hashtag controls)
-│       ├── ContentCalendarPage.tsx      # 9. Content Calendar (Release scheduling across YouTube, Instagram, TikTok)
-│       ├── SocialAccountsPage.tsx       # 10. Social Accounts (Connected channel stubs & approval enforcement rules)
-│       ├── UploadApprovalPage.tsx       # 11. Upload Approval (Approve, Reject, Edit, Schedule & Publish human gate)
-│       ├── AnalyticsPage.tsx            # 12. Analytics (Views, Likes, Comments, Engagement & platform breakdown)
-│       └── SettingsPage.tsx             # 13. Settings (Studio defaults, FastAPI/PostgreSQL/FFmpeg/Whisper specs)
+/backend
+├── requirements.txt                  # FastAPI, SQLAlchemy, psycopg2, Celery, Redis, faster-whisper, google-genai
+├── .env.example                      # Python backend environment template
+├── scripts/
+│   └── run_faster_whisper.py         # CLI runner invoked by Node or Python workers
+└── app/
+    ├── main.py                       # FastAPI application entrypoint
+    ├── config.py                     # Environment & storage configuration
+    ├── errors.py                     # Structured exception handlers
+    ├── database.py                   # SQLAlchemy engine & session factory
+    ├── models.py                     # SQLAlchemy ORM models (videos, transcripts, highlights, generated_clips, processing_jobs)
+    ├── storage.py                    # Local disk storage manager for videos, audio, clips, thumbnails
+    ├── routes/
+    │   └── api.py                    # REST endpoints (/upload, /transcribe, /highlights, /generate-clips, /download)
+    ├── services/
+    │   ├── video_processor.py        # FFprobe metadata & FFmpeg 9:16 / 16:9 / 1:1 clip & thumbnail generator
+    │   ├── audio_extractor.py        # FFmpeg 16kHz mono PCM WAV extractor
+    │   ├── whisper_service.py        # Local faster-whisper transcription engine (CPU/CUDA)
+    │   └── gemini_service.py         # Official google-genai highlight detection service
+    └── tasks/
+        └── celery_app.py             # Celery + Redis background task pipeline
 ```
 
 ---
 
-## 3. How to Run the Application
+## 2. How to Run
 
+### Full-Stack Server (Node.js + Vite + PostgreSQL + FFmpeg)
 1. **Install dependencies**:
    ```bash
    npm install
    ```
-2. **Start the development server (Port 3000)**:
+2. **Push PostgreSQL schema**:
+   ```bash
+   npx drizzle-kit push --config=src/db/drizzle.config.ts
+   ```
+3. **Start the full-stack server (Port 3000)**:
    ```bash
    npm run dev
    ```
-3. **Run unit tests**:
+4. **Run unit tests**:
    ```bash
    npx --yes tsx --test src/utils/clipLogic.test.ts
    ```
-4. **Build for production**:
+
+### Standalone Python FastAPI Backend (`/backend`)
+1. **Create a Python virtual environment & install dependencies**:
    ```bash
-   npm run build
+   cd backend
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
    ```
-
----
-
-## 4. Dependencies
-
-- `react` (`^19.0.1`) & `react-dom` (`^19.0.1`)
-- `tailwindcss` (`^4.3.3`) & `@tailwindcss/vite`
-- `lucide-react` (`^0.546.0`)
-- `typescript` (`^7.0.2`) & `vite` (`^8.3.0`)
-
----
-
-## 5. Current Implemented Features (Phase 1)
-
-- **Brand Identity & Dark SaaS Design**: Custom `ClipMatrixLogo` (filmstrip + play prism), near-black/charcoal surfaces (`#090A0F` / `#10131E`), purple-to-electric-blue gradient accents, `Plus Jakarta Sans` + `DM Sans` + `JetBrains Mono` typography, and responsive desktop/tablet/mobile layouts.
-- **Full 13-Page Navigation Architecture**: Every sidebar item opens its own dedicated page with interactive state and zero dead links.
-- **Overview Dashboard**: Displays Total Videos, Generated Clips, Pending Approval, Published Clips, Active Live Streams, and Scheduled Posts, alongside Recent Projects, Recently Generated Clips, Active Streamers, Recent Publishing Activity, and Quick Actions.
-- **Multi-Source Video & Podcast Workflows**: Form validation and interactive job creation for Local uploads, YouTube links, Google Drive links, Livestream recordings, and multi-speaker Podcasts.
-- **Caption Studio**: Generates 5–10 localized captions across 6 styles (`Viral`, `Funny`, `Professional`, `Emotional`, `Motivational`, `Storytelling`) in **English**, **Urdu (اردو)**, and **Roman Urdu**, with Short/Medium/Long lengths, emoji/hashtag toggles, inline editing, copying, and saving.
-- **Upload Approval Workflow**: Human-in-the-loop review queue allowing users to inspect, edit captions/notes, approve, reject, schedule, or publish clips.
-
----
-
-## 6. Features Reserved for Future Phases (Phase 2+)
-
-- **Python FastAPI & PostgreSQL Persistence**: Connecting `src/services/apiContracts.ts` to live FastAPI endpoints and PostgreSQL tables (`video_projects`, `generated_clips`, `streamer_monitors`, `caption_variants`).
-- **FFmpeg & Whisper Local Worker Pipeline**: Running Celery + Redis workers for real MP4 transcoding, MediaPipe active-speaker crop, and local `faster-whisper` word-level transcription.
-- **Live Gemini API & OAuth Publishing**: Server-side Gemini API highlight scoring and live YouTube Data API / Instagram Graph API / TikTok Content Posting API uploads.
+2. **Configure environment variables**:
+   ```bash
+   cp .env.example .env
+   # Set GEMINI_API_KEY, POSTGRES_*, and REDIS_URL in .env
+   ```
+3. **Start the FastAPI server**:
+   ```bash
+   uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+   ```
+4. **Start the Celery background worker (optional, when Redis is running)**:
+   ```bash
+   celery -A app.tasks.celery_app.celery_app worker --loglevel=info
+   ```
