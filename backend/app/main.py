@@ -8,7 +8,10 @@ from .routes.api import router as api_router
 from .storage import init_storage_dirs
 
 init_storage_dirs()
-Base.metadata.create_all(bind=engine)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as exc:
+    print(f"Warning: SQLAlchemy create_all notice: {exc}")
 
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
 

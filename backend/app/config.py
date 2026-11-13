@@ -2,19 +2,24 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
+
+# Load workspace root .env first, then backend/.env without overriding runtime env vars
+load_dotenv(WORKSPACE_ROOT / ".env", override=False)
+load_dotenv(BACKEND_ROOT / ".env", override=False)
 
 
 class Settings:
-    PROJECT_NAME: str = "ClipMatrix Phase 2 API"
-    VERSION: str = "2.0.0"
+    PROJECT_NAME: str = "ClipMatrix Phase 2 FastAPI Engine"
+    VERSION: str = "2.1.0"
 
-    # PostgreSQL discrete connection parameters
+    # PostgreSQL discrete connection parameters (supports Cloud SQL & local Postgres)
     SQL_HOST: str = os.getenv("SQL_HOST", "localhost")
     SQL_PORT: str = os.getenv("SQL_PORT", "5432")
     SQL_DB_NAME: str = os.getenv("SQL_DB_NAME", "clipmatrix")
-    SQL_USER: str = os.getenv("SQL_USER", "postgres")
-    SQL_PASSWORD: str = os.getenv("SQL_PASSWORD", "")
+    SQL_USER: str = os.getenv("SQL_USER") or os.getenv("SQL_ADMIN_USER") or "postgres"
+    SQL_PASSWORD: str = os.getenv("SQL_PASSWORD") or os.getenv("SQL_ADMIN_PASSWORD") or ""
 
     # Redis & Celery
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -22,7 +27,7 @@ class Settings:
     CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 
     # Whisper Local Configuration
-    WHISPER_MODEL_SIZE: str = os.getenv("WHISPER_MODEL_SIZE", "base")
+    WHISPER_MODEL_SIZE: str = os.getenv("WHISPER_MODEL_SIZE", "tiny")
     WHISPER_DEVICE: str = os.getenv("WHISPER_DEVICE", "cpu")
     WHISPER_COMPUTE_TYPE: str = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 
@@ -30,8 +35,10 @@ class Settings:
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-4-hydrogen")
 
-    # Storage
-    STORAGE_ROOT: Path = Path(os.getenv("STORAGE_DIR", "./storage")).resolve()
+    # Unified Storage Directory at Workspace Root
+    STORAGE_ROOT: Path = Path(
+        os.getenv("STORAGE_DIR", str(WORKSPACE_ROOT / "storage"))
+    ).resolve()
     VIDEOS_DIR: Path = STORAGE_ROOT / "videos"
     AUDIO_DIR: Path = STORAGE_ROOT / "audio"
     CLIPS_DIR: Path = STORAGE_ROOT / "clips"

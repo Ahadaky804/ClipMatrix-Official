@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Plus,
   Trash2,
+  Activity,
 } from 'lucide-react';
 import {
   AspectRatioPreset,
@@ -31,6 +32,15 @@ interface ManualClipDraft {
   title: string;
   startTime: string;
   endTime: string;
+}
+
+interface SystemQuickStatus {
+  ffmpegAvailable: boolean;
+  ffprobeAvailable: boolean;
+  fasterWhisperInstalled: boolean;
+  geminiApiKeyConfigured: boolean;
+  postgresConfigured: boolean;
+  redisAvailable: boolean;
 }
 
 interface LongVideoToClipsPageProps {
@@ -67,6 +77,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
 
+  const [systemStatus, setSystemStatus] = useState<SystemQuickStatus | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<number | null>(
     backendVideos[0]?.id ?? null
   );
@@ -77,7 +88,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
   // Step 2: Transcription state
   const [whisperModelSize, setWhisperModelSize] = useState<
     'tiny' | 'base' | 'small' | 'medium' | 'large-v3'
-  >('base');
+  >('tiny');
   const [transcribeLanguage, setTranscribeLanguage] = useState('en');
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcriptionNotice, setTranscriptionNotice] = useState('');
@@ -92,8 +103,8 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
   >('exact');
   const [customDuration, setCustomDuration] = useState<number>(30);
   const [aspectRatio, setAspectRatio] = useState<AspectRatioPreset>('9:16');
-  const [manualStartTime, setManualStartTime] = useState('00:05');
-  const [manualEndTime, setManualEndTime] = useState('00:20');
+  const [manualStartTime, setManualStartTime] = useState('00:02');
+  const [manualEndTime, setManualEndTime] = useState('00:14');
   const [manualClipTitle, setManualClipTitle] = useState('');
   const [manualQueue, setManualQueue] = useState<ManualClipDraft[]>([]);
   const [isRenderingClips, setIsRenderingClips] = useState(false);
@@ -103,6 +114,15 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
 
   const [errorMessage, setErrorMessage] = useState('');
   const [successBanner, setSuccessBanner] = useState('');
+
+  useEffect(() => {
+    fetch('/api/system/status')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) setSystemStatus(data);
+      })
+      .catch(() => {});
+  }, []);
 
   // Sync selected video ID when backendVideos load
   useEffect(() => {
@@ -172,7 +192,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
           setSelectedVideoId(data.video.id);
           setUploadTitle('');
           setSuccessBanner(
-            `Uploaded "${data.video.title}" (${data.video.width}x${data.video.height}, ${data.video.durationSeconds}s, ${formatBytes(data.video.fileSizeBytes)}) and stored in PostgreSQL.`
+            `Uploaded "${data.video.title}" (${data.video.width}x${data.video.height}, ${data.video.durationSeconds}s, ${formatBytes(data.video.fileSizeBytes)}) and verified via FFprobe.`
           );
         } else {
           setErrorMessage(
@@ -192,7 +212,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
     xhr.send(formData);
   };
 
-  // Step 1B: Generate a real playable MP4 video via FFmpeg on the backend
+  // Step 1B: Generate a real playable MP4 video with spoken English voiceover via FFmpeg
   const handleSynthesizeRealTestVideo = async () => {
     setErrorMessage('');
     setSuccessBanner('');
@@ -204,28 +224,28 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
         body: JSON.stringify({
           title:
             uploadTitle.trim() ||
-            'AI Product Keynote & Creator Retention Masterclass',
-          durationSeconds: 45,
+            'Creator Retention & AI Video Engineering Masterclass',
+          durationSeconds: 36,
         }),
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to synthesize test video.');
+        throw new Error(data.error || 'Failed to synthesize spoken test video.');
       }
       await onRefreshWorkspace();
       setSelectedVideoId(data.video.id);
       setUploadTitle('');
       setSuccessBanner(
-        `Generated real MP4 video "${data.video.title}" via FFmpeg (${data.video.width}x${data.video.height}, ${data.video.durationSeconds}s, ${formatBytes(data.video.fileSizeBytes)}) and saved to PostgreSQL.`
+        `Generated real spoken-English MP4 video "${data.video.title}" via FFmpeg (${data.video.width}x${data.video.height}, ${data.video.durationSeconds}s, ${formatBytes(data.video.fileSizeBytes)}).`
       );
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to create test video.');
+      setErrorMessage(err.message || 'Failed to create spoken test video.');
     } finally {
       setIsSynthesizingTest(false);
     }
   };
 
-  // Step 2: Extract Audio with FFmpeg & Transcribe
+  // Step 2: Extract Audio with FFmpeg & Transcribe with faster-whisper
   const handleRunTranscription = async () => {
     if (!activeVideo) {
       setErrorMessage('Please upload or select a video in Step 1 first.');
@@ -248,23 +268,23 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
       );
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || 'Transcription failed.');
+        throw new Error(data.error || 'Whisper transcription failed.');
       }
       if (data.notice) {
         setTranscriptionNotice(data.notice);
       }
       await onRefreshWorkspace();
       setSuccessBanner(
-        `Audio extracted via FFmpeg and transcribed (${data.transcript?.segments?.length || 0} timestamped segments stored in PostgreSQL).`
+        `Audio extracted via FFmpeg and transcribed locally with faster-whisper (${data.transcript?.segments?.length || 0} timestamped speech segments).`
       );
     } catch (err: any) {
-      setErrorMessage(err.message || 'Audio extraction & transcription failed.');
+      setErrorMessage(err.message || 'Audio extraction & Whisper transcription failed.');
     } finally {
       setIsTranscribing(false);
     }
   };
 
-  // Step 3: Run Gemini AI Highlight Detection on the transcript
+  // Step 3: Run Gemini AI Highlight Detection on the Whisper transcript
   const handleDetectHighlights = async () => {
     if (!activeVideo) {
       setErrorMessage('Please upload or select a video first.');
@@ -272,7 +292,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
     }
     if (!activeTranscript) {
       setErrorMessage(
-        'Please complete Step 2 (Audio Extraction & Transcription) before running Gemini AI highlight analysis.'
+        'Please complete Step 2 (faster-whisper Speech Transcription) before running Gemini AI highlight analysis.'
       );
       return;
     }
@@ -295,7 +315,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
       const ids = (data.highlights || []).map((h: any) => h.id);
       setSelectedHighlightIds(ids);
       setSuccessBanner(
-        `Gemini AI analyzed the transcript and detected ${ids.length} viral highlights.`
+        `Gemini AI analyzed the Whisper transcript and detected ${ids.length} viral highlights.`
       );
     } catch (err: any) {
       setErrorMessage(
@@ -423,17 +443,25 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-[#1C2030]">
         <div>
           <div className="text-xs text-purple-400 font-medium">
-            Video Ingestion · Audio Transcription · AI Highlight Slicing
+            Primary FastAPI Engine · FFprobe · Faster-Whisper · Gemini AI · FFmpeg
           </div>
           <h1 className="text-2xl font-display font-bold text-white">
             Long Video to Clips
           </h1>
           <p className="text-sm text-slate-400">
-            Upload real video files from PC or mobile, extract 16kHz audio for transcription, detect viral hooks with Gemini AI, and slice frame-accurate MP4 clips with FFmpeg.
+            Upload real video files from PC or mobile, transcribe spoken audio locally with faster-whisper, detect viral hooks with Gemini AI, and slice frame-accurate MP4 clips with FFmpeg.
           </p>
         </div>
 
         <div className="flex items-center gap-2.5 self-start">
+          <button
+            type="button"
+            onClick={() => onNavigate('settings')}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#151928] hover:bg-[#1C2236] border border-[#262E45] text-xs font-medium text-slate-200 whitespace-nowrap"
+          >
+            <Activity className="w-3.5 h-3.5 text-emerald-400" />
+            <span>System Diagnostics</span>
+          </button>
           <button
             type="button"
             onClick={() => onNavigate('generated-clips')}
@@ -441,15 +469,42 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
           >
             Browse Generated Clips
           </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('upload-approval')}
-            className="px-3.5 py-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-xs font-medium text-purple-200 whitespace-nowrap"
-          >
-            Approval Queue
-          </button>
         </div>
       </div>
+
+      {/* Compact Live Engine Verification Strip */}
+      {systemStatus && (
+        <div className="px-4 py-2.5 rounded-xl bg-[#10131E] border border-[#1E2436] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+          <div className="flex flex-wrap items-center gap-4">
+            <span className="text-slate-400">Runtime Status:</span>
+            <span className={systemStatus.ffmpegAvailable ? 'text-emerald-400' : 'text-red-400'}>
+              FFmpeg: {systemStatus.ffmpegAvailable ? 'READY' : 'OFFLINE'}
+            </span>
+            <span className={systemStatus.ffprobeAvailable ? 'text-emerald-400' : 'text-red-400'}>
+              FFprobe: {systemStatus.ffprobeAvailable ? 'READY' : 'OFFLINE'}
+            </span>
+            <span className={systemStatus.fasterWhisperInstalled ? 'text-emerald-400' : 'text-red-400'}>
+              faster-whisper: {systemStatus.fasterWhisperInstalled ? 'READY' : 'MISSING'}
+            </span>
+            <span className={systemStatus.geminiApiKeyConfigured ? 'text-emerald-400' : 'text-amber-400'}>
+              Gemini API: {systemStatus.geminiApiKeyConfigured ? 'VERIFIED' : 'CHECK KEY'}
+            </span>
+            <span className={systemStatus.postgresConfigured ? 'text-emerald-400' : 'text-red-400'}>
+              PostgreSQL: {systemStatus.postgresConfigured ? 'ONLINE' : 'OFFLINE'}
+            </span>
+            <span className={systemStatus.redisAvailable ? 'text-emerald-400' : 'text-slate-400'}>
+              Queue: {systemStatus.redisAvailable ? 'REDIS' : 'SYNC FASTAPI'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigate('settings')}
+            className="text-purple-400 hover:underline font-sans"
+          >
+            Inspect Full Diagnostics
+          </button>
+        </div>
+      )}
 
       {/* Status & Error Banners */}
       {errorMessage && (
@@ -587,13 +642,13 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
                     disabled={isSynthesizingTest || uploadProgress !== null}
                     onClick={handleSynthesizeRealTestVideo}
                     className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-[#161B2B] hover:bg-[#1E253A] border border-[#262F49] disabled:opacity-50 text-xs font-medium text-slate-200 transition-colors whitespace-nowrap"
-                    title="Synthesize a real 45-second MP4 broadcast video using FFmpeg on the server"
+                    title="Synthesize a real MP4 video with spoken English voiceover using FFmpeg"
                   >
                     <Film className="w-3.5 h-3.5 text-purple-400" />
                     <span>
                       {isSynthesizingTest
-                        ? 'Encoding MP4...'
-                        : 'Generate 45s Test MP4'}
+                        ? 'Encoding Speech MP4...'
+                        : 'Generate Spoken Test MP4'}
                     </span>
                   </button>
                 </div>
@@ -603,7 +658,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
             {uploadProgress !== null && (
               <div className="space-y-1">
                 <div className="flex justify-between text-xs font-mono text-slate-300">
-                  <span>Uploading video stream to backend...</span>
+                  <span>Uploading video stream to FastAPI backend...</span>
                   <span>{uploadProgress}%</span>
                 </div>
                 <div className="w-full h-2 rounded-full bg-[#0C0E17] overflow-hidden border border-[#22283B]">
@@ -660,26 +715,26 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
               </div>
             ) : (
               <div className="p-4 rounded-lg bg-[#0C0E17] border border-[#22283B] text-xs text-slate-400">
-                No video uploaded to PostgreSQL yet. Upload an MP4/MOV/WebM file from your device or click{' '}
-                <strong className="text-white">Generate 45s Test MP4</strong> to synthesize a real playable broadcast video via FFmpeg.
+                No video uploaded yet. Upload an MP4/MOV/WebM file from your device or click{' '}
+                <strong className="text-white">Generate Spoken Test MP4</strong> to synthesize a real playable video with spoken English narration.
               </div>
             )}
           </section>
 
-          {/* STEP 2: Audio Extraction (FFmpeg) & Whisper / AI Transcription */}
+          {/* STEP 2: Audio Extraction (FFmpeg) & Local faster-whisper Speech-to-Text */}
           <section className="rounded-xl bg-[#10131E] border border-[#1E2436] p-6 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1C2235] pb-3">
               <div>
                 <span className="text-[11px] font-mono uppercase text-blue-400">
-                  Step 2 · Audio Extraction &amp; Speech Transcription
+                  Step 2 · FFmpeg Audio Extraction &amp; Local Faster-Whisper Speech-to-Text
                 </span>
                 <h2 className="text-base font-display font-semibold text-white">
-                  Extract 16kHz WAV &amp; Generate Timestamped Transcript
+                  Extract 16kHz WAV &amp; Transcribe Speech with faster-whisper
                 </h2>
               </div>
               {activeTranscript && (
                 <span className="text-[11px] font-mono text-emerald-400 shrink-0">
-                  {activeTranscript.segments.length} segments ready
+                  {activeTranscript.engineUsed} · {activeTranscript.segments.length} segments
                 </span>
               )}
             </div>
@@ -690,7 +745,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
                   htmlFor="whisper-model-size"
                   className="block text-xs font-medium text-slate-300 mb-1"
                 >
-                  Whisper Model Size
+                  Faster-Whisper Model Size
                 </label>
                 <select
                   id="whisper-model-size"
@@ -738,16 +793,16 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
                 <FileAudio className="w-3.5 h-3.5" />
                 <span>
                   {isTranscribing
-                    ? 'Extracting WAV & Transcribing...'
+                    ? 'Running faster-whisper...'
                     : activeTranscript
-                    ? 'Re-Transcribe Audio'
+                    ? 'Re-Transcribe with Whisper'
                     : 'Extract Audio & Transcribe'}
                 </span>
               </button>
             </div>
 
             {transcriptionNotice && (
-              <div className="p-3 rounded-lg bg-[#0C0E17] border border-[#22283B] text-[11px] text-slate-300 font-mono">
+              <div className="p-3 rounded-lg bg-[#0C0E17] border border-[#22283B] text-[11px] text-emerald-300 font-mono">
                 {transcriptionNotice}
               </div>
             )}
@@ -774,7 +829,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs text-slate-400">
                   <span>
-                    Timestamped Transcript Segments (click any segment to set manual clip timestamps &amp; seek video):
+                    Faster-Whisper Speech Segments (click any segment to set manual clip timestamps &amp; seek video):
                   </span>
                   <span className="font-mono">
                     {activeTranscript.segments.length} segments
@@ -839,8 +894,8 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
             {activeHighlights.length === 0 ? (
               <div className="p-4 rounded-lg bg-[#0C0E17] border border-[#22283B] text-xs text-slate-400">
                 {activeTranscript
-                  ? 'Click "Analyze Transcript with Gemini AI" to score hooks, emotional peaks, and educational insights from the transcript.'
-                  : 'Complete Step 2 (Audio Extraction & Transcription) first so Gemini AI can analyze the timestamped transcript.'}
+                  ? 'Click "Analyze Transcript with Gemini AI" to score hooks, emotional peaks, and educational insights from the faster-whisper transcript.'
+                  : 'Complete Step 2 (faster-whisper Speech Transcription) first so Gemini AI can analyze the timestamped speech segments.'}
               </div>
             ) : (
               <div className="space-y-3">
@@ -1147,7 +1202,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
           </section>
         </div>
 
-        {/* Right 5 Columns: Real HTML5 Video Player, Recently Rendered MP4s & PostgreSQL Queue */}
+        {/* Right 5 Columns: Real HTML5 Video Player, Recently Rendered MP4s & Video Queue */}
         <div className="xl:col-span-5 space-y-6">
           {/* Live Source Video Player */}
           <div className="rounded-xl bg-[#10131E] border border-[#1E2436] p-5 space-y-4">
@@ -1259,7 +1314,7 @@ export const LongVideoToClipsPage: React.FC<LongVideoToClipsPageProps> = ({
             </div>
           )}
 
-          {/* PostgreSQL & Workspace Video Queue */}
+          {/* Video Queue */}
           <div className="rounded-xl bg-[#10131E] border border-[#1E2436] p-5 space-y-3">
             <h3 className="text-xs font-display font-semibold text-slate-300">
               Ingested Video Queue ({projects.length})
